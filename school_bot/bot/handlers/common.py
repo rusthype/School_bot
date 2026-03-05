@@ -1,3 +1,5 @@
+import re
+
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -7,10 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
 from datetime import datetime
 
-from school_bot.bot.config import Settings
 from school_bot.database.models import User, UserRole, Task
 from school_bot.bot.states.book_order import BookOrderStates
 from school_bot.bot.states.new_task import NewTaskStates
+from school_bot.bot.states.registration import RegistrationStates
+from school_bot.bot.services.profile_service import upsert_profile, can_register_again
+from school_bot.bot.services.profile_service import revoke_teacher
+from school_bot.bot.services.approval_service import notify_superusers_new_registration
 
 router = Router(name=__name__)
 
@@ -28,7 +33,7 @@ def get_main_keyboard(is_superuser: bool = False, is_teacher: bool = False) -> R
     builder.row(KeyboardButton(text="/help"))
 
     # Teacher uchun tugmalar
-    if is_teacher:
+    if is_teacher or is_superuser:
         builder.row(
             KeyboardButton(text="/new_task"),
             KeyboardButton(text="/order_book")
@@ -37,15 +42,20 @@ def get_main_keyboard(is_superuser: bool = False, is_teacher: bool = False) -> R
     # Superuser uchun tugmalar
     if is_superuser:
         builder.row(
-            KeyboardButton(text="/add_teacher"),
-            KeyboardButton(text="/remove_teacher")
+            KeyboardButton(text="/remove_teacher"),
+            KeyboardButton(text="/list_teachers")
         )
         builder.row(
-            KeyboardButton(text="/list_teachers"),
-            KeyboardButton(text="/stats")
-        )
-        builder.row(
+            KeyboardButton(text="/stats"),
             KeyboardButton(text="/users")
+        )
+        builder.row(
+            KeyboardButton(text="/groups"),
+            KeyboardButton(text="/add_group")
+        )
+        builder.row(
+            KeyboardButton(text="/edit_group"),
+            KeyboardButton(text="/remove_group")
         )
 
     # Tugmalarni sozlash
@@ -57,6 +67,10 @@ def get_main_keyboard(is_superuser: bool = False, is_teacher: bool = False) -> R
 @router.message(Command("start", "help"))
 async def cmd_start(
         message: Message,
+        state: FSMContext,
+        session: AsyncSession,
+        db_user,
+        profile,
         is_superuser: bool = False,
         is_teacher: bool = False
 ) -> None:
@@ -64,34 +78,62 @@ async def cmd_start(
     print(
         f"🔍 DEBUG: cmd_start called by user {message.from_user.id}, is_superuser={is_superuser}, is_teacher={is_teacher}")
 
+    if not (is_superuser or is_teacher):
+        if profile and not profile.is_approved:
+            if can_register_again(profile):
+                await state.clear()
+                await state.set_state(RegistrationStates.full_name)
+                await message.answer(
+                    "🔄 Yangi ro'yxatdan o'tish so'rovini yuborish uchun to'liq ismingizni qayta kiriting:\n\n"
+                    "❌ Bekor qilish uchun /cancel bosing"
+                )
+                return
+
+            await message.answer(
+                "⏳ Ro'yxatdan o'tishingiz tasdiqlanishi kutilmoqda. Administrator tasdig'ini kuting."
+            )
+            return
+
+        if profile is None:
+            await state.clear()
+            await state.set_state(RegistrationStates.full_name)
+            await message.answer(
+                "👤 Iltimos, to'liq ismingizni kiriting (ism va familiya):\n\n"
+                "❌ Bekor qilish uchun /cancel bosing"
+            )
+            return
+
     lines: list[str] = [
-        "📚 **School Task Poll Bot**",
+        "📚 **Maktab topshiriqlari bot**",
         "",
         "Quyidagi tugmalardan foydalanishingiz mumkin:",
     ]
 
-    if is_teacher:
+    if is_teacher or is_superuser:
         lines += [
             "",
-            "👨‍🏫 **Teacher komandalari:**",
+            "👨‍🏫 **O'qituvchi buyruqlari:**",
             "/new_task - Yangi topshiriq",
-            "/order_book - Kitob buyurtma",
+            "/order_book - Kitob buyurtma qilish",
         ]
 
     if is_superuser:
         lines += [
             "",
-            "👑 **Superuser komandalari:**",
-            "/add_teacher - Teacher qo'shish",
-            "/remove_teacher - Teacher o'chirish",
-            "/list_teachers - Teacherlar ro'yxati",
+            "👑 **Superfoydalanuvchi buyruqlari:**",
+            "/remove_teacher - O'qituvchini o'chirish",
+            "/list_teachers - O'qituvchilar ro'yxati",
             "/stats - Statistika",
             "/users - Foydalanuvchilar",
+            "/groups - Guruhlar ro'yxati",
+            "/add_group - Guruh qo'shish",
+            "/edit_group - Guruhni tahrirlash",
+            "/remove_group - Guruhni o'chirish",
         ]
 
     lines += [
         "",
-        "📊 Oddiy foydalanuvchilar pollarda qatnashishi mumkin.",
+        "📊 Oddiy foydalanuvchilar so'rovnomalarda qatnashishi mumkin.",
         "",
         "ℹ️ Tugmalarni bosish yoki komandalarni yozish orqali botdan foydalaning."
     ]
@@ -101,15 +143,31 @@ async def cmd_start(
 
 
 @router.message(F.text == "/start")
-async def button_start(message: Message, is_superuser: bool = False, is_teacher: bool = False) -> None:
+async def button_start(
+        message: Message,
+        state: FSMContext,
+        session: AsyncSession,
+        db_user,
+        profile,
+        is_superuser: bool = False,
+        is_teacher: bool = False
+) -> None:
     print(f"🔍 DEBUG: button_start pressed by user {message.from_user.id}")
-    await cmd_start(message, is_superuser, is_teacher)
+    await cmd_start(message, state, session, db_user, profile, is_superuser, is_teacher)
 
 
 @router.message(F.text == "/help")
-async def button_help(message: Message, is_superuser: bool = False, is_teacher: bool = False) -> None:
+async def button_help(
+        message: Message,
+        state: FSMContext,
+        session: AsyncSession,
+        db_user,
+        profile,
+        is_superuser: bool = False,
+        is_teacher: bool = False
+) -> None:
     print(f"🔍 DEBUG: button_help pressed by user {message.from_user.id}")
-    await cmd_start(message, is_superuser, is_teacher)
+    await cmd_start(message, state, session, db_user, profile, is_superuser, is_teacher)
 
 
 @router.message(F.text == "/new_task")
@@ -118,14 +176,16 @@ async def button_new_task(
         state: FSMContext,
         session: AsyncSession,
         db_user,
-        is_teacher: bool = False
+        profile,
+        is_teacher: bool = False,
+        is_superuser: bool = False
 ) -> None:
     print(f"🔍 DEBUG: button_new_task pressed by user {message.from_user.id}, is_teacher={is_teacher}")
-    if not is_teacher:
-        await message.answer("⛔ Bu tugma faqat teacherlar uchun.")
+    if not (is_teacher or is_superuser):
+        await message.answer("⛔ Bu tugma faqat o'qituvchilar uchun.")
         return
     from school_bot.bot.handlers.teacher import cmd_new_task
-    await cmd_new_task(message, state, is_teacher)
+    await cmd_new_task(message, state, session, profile, is_teacher or is_superuser, is_superuser)
 
 
 @router.message(F.text == "/order_book")
@@ -134,14 +194,15 @@ async def button_order_book(
         state: FSMContext,
         session: AsyncSession,
         db_user,
-        is_teacher: bool = False
+        is_teacher: bool = False,
+        is_superuser: bool = False
 ) -> None:
     print(f"🔍 DEBUG: button_order_book pressed by user {message.from_user.id}, is_teacher={is_teacher}")
-    if not is_teacher:
-        await message.answer("⛔ Bu tugma faqat teacherlar uchun.")
+    if not (is_teacher or is_superuser):
+        await message.answer("⛔ Bu tugma faqat o'qituvchilar uchun.")
         return
     from school_bot.bot.handlers.teacher import cmd_order_book
-    await cmd_order_book(message, state, is_teacher)
+    await cmd_order_book(message, state, is_teacher or is_superuser, is_superuser)
 
 
 @router.message(F.text == "/add_teacher")
@@ -154,7 +215,7 @@ async def button_add_teacher(
 ) -> None:
     print(f"🔍 DEBUG: button_add_teacher pressed by user {message.from_user.id}, is_superuser={is_superuser}")
     if not is_superuser:
-        await message.answer("⛔ Bu tugma faqat superuserlar uchun.")
+        await message.answer("⛔ Bu tugma faqat superfoydalanuvchilar uchun.")
         return
     from school_bot.bot.handlers.admin import cmd_add_teacher_start
     await cmd_add_teacher_start(message, state, is_superuser)
@@ -170,7 +231,7 @@ async def button_remove_teacher(
 ) -> None:
     print(f"🔍 DEBUG: button_remove_teacher pressed by user {message.from_user.id}, is_superuser={is_superuser}")
     if not is_superuser:
-        await message.answer("⛔ Bu tugma faqat superuserlar uchun.")
+        await message.answer("⛔ Bu tugma faqat superfoydalanuvchilar uchun.")
         return
 
     # Teacherlar ro'yxatini olish
@@ -194,7 +255,7 @@ async def button_remove_teacher(
             teacher_name = f"ID: {teacher.telegram_id}"
 
         button_text = f"👨‍🏫 {teacher_name}"
-        builder.button(text=button_text, callback_data=f"del_teacher_{teacher.id}")
+        builder.button(text=button_text, callback_data=f"common_del_teacher_{teacher.id}")
 
     builder.adjust(1)
 
@@ -206,14 +267,14 @@ async def button_remove_teacher(
     )
 
 
-@router.callback_query(lambda c: c.data.startswith("del_teacher_"))
+@router.callback_query(lambda c: c.data.startswith("common_del_teacher_"))
 async def process_remove_teacher_selection(
         callback: CallbackQuery,
         state: FSMContext,
         session: AsyncSession,
 ) -> None:
     """Tanlangan o'qituvchini o'chirish"""
-    teacher_id = int(callback.data.replace("del_teacher_", ""))
+    teacher_id = int(callback.data.replace("common_del_teacher_", ""))
     print(f"🔍 DEBUG: Removing teacher with ID: {teacher_id}")
 
     # Teacherni bazadan olish
@@ -236,9 +297,8 @@ async def process_remove_teacher_selection(
 
     print(f"🔍 DEBUG: Removing teacher: {teacher_name}")
 
-    # Teacherni o'chirish (role ni None qilish)
-    teacher.role = None
-    await session.commit()
+    # Teacherni o'chirish (profile va role ni yangilash)
+    await revoke_teacher(session, teacher.id)
 
     await callback.message.edit_text(
         f"✅ O'qituvchi olib tashlandi: {teacher_name}\n"
@@ -258,7 +318,7 @@ async def button_list_teachers(
 ) -> None:
     print(f"🔍 DEBUG: button_list_teachers pressed by user {message.from_user.id}, is_superuser={is_superuser}")
     if not is_superuser:
-        await message.answer("⛔ Bu tugma faqat superuserlar uchun.")
+        await message.answer("⛔ Bu tugma faqat superfoydalanuvchilar uchun.")
         return
 
     result = await session.execute(
@@ -296,7 +356,7 @@ async def button_stats(
 ) -> None:
     print(f"🔍 DEBUG: button_stats pressed by user {message.from_user.id}, is_superuser={is_superuser}")
     if not is_superuser:
-        await message.answer("⛔ Bu tugma faqat superuserlar uchun.")
+        await message.answer("⛔ Bu tugma faqat superfoydalanuvchilar uchun.")
         return
 
     # Umumiy statistika
@@ -324,21 +384,21 @@ async def button_stats(
         "",
         "👥 **Foydalanuvchilar:**",
         f"   • Jami: {users_count} ta",
-        f"   • Superuser: {superusers_count} ta",
-        f"   • Teacher: {teachers_count} ta",
-        f"   • Oddiy user: {regular_users} ta",
+        f"   • Superfoydalanuvchi: {superusers_count} ta",
+        f"   • O'qituvchi: {teachers_count} ta",
+        f"   • Oddiy foydalanuvchi: {regular_users} ta",
         "",
         f"📝 **Topshiriqlar:** {tasks_count} ta",
         ""
     ]
 
     if active_teachers:
-        lines.append("⭐ **Eng faol teacherlar:**")
+        lines.append("⭐ **Eng faol o'qituvchilar:**")
         for i, teacher in enumerate(active_teachers, 1):
             teacher_name = teacher.full_name or f"Foydalanuvchi {teacher.telegram_id}"
             lines.append(f"   {i}. {teacher_name} - {teacher.task_count} ta")
     else:
-        lines.append("⭐ **Eng faol teacherlar:**")
+        lines.append("⭐ **Eng faol o'qituvchilar:**")
         lines.append("   Hozircha hech qanday topshiriq yo'q")
 
     lines.extend(["", f"📅 Oxirgi yangilanish: {datetime.now().strftime('%d.%m.%Y %H:%M')}"])
@@ -359,7 +419,7 @@ async def button_users(
 ) -> None:
     print(f"🔍 DEBUG: button_users pressed by user {message.from_user.id}, is_superuser={is_superuser}")
     if not is_superuser:
-        await message.answer("⛔ Bu tugma faqat superuserlar uchun.")
+        await message.answer("⛔ Bu tugma faqat superfoydalanuvchilar uchun.")
         return
 
     # Barcha userlarni olish
@@ -374,11 +434,11 @@ async def button_users(
         lines = ["👥 **Barcha foydalanuvchilar:**", f"Jami: {len(users)} ta", ""]
         for i, user in enumerate(users[:20], 1):  # Oxirgi 20 ta
             if user.role == UserRole.superuser:
-                role_emoji = "👑 Superuser"
+                role_emoji = "👑 Superfoydalanuvchi"
             elif user.role == UserRole.teacher:
-                role_emoji = "👨‍🏫 Teacher"
+                role_emoji = "👨‍🏫 O'qituvchi"
             else:
-                role_emoji = "👤 Oddiy user"
+                role_emoji = "👤 Oddiy foydalanuvchi"
             name = user.full_name or "Ism yo'q"
             created = user.created_at.strftime('%d.%m.%Y') if user.created_at else 'Noma\'lum'
             lines.append(f"{i}. 🆔 {user.telegram_id}")
@@ -395,6 +455,133 @@ async def button_users(
     await message.answer(result_message, reply_markup=keyboard)
 
 
+def _split_full_name(full_name: str) -> tuple[str | None, str | None]:
+    parts = [p for p in (full_name or "").split() if p]
+    if len(parts) < 2:
+        return None, None
+    return parts[0], " ".join(parts[1:])
+
+
+def _normalize_phone_number(raw: str) -> str | None:
+    if not raw:
+        return None
+
+    raw = raw.strip()
+
+    # Flexible validation: optional +, allow separators (spaces, dashes, parentheses)
+    uz_full_pattern = re.compile(
+        r"^\s*\+?\s*\(?\s*998\)?[\s\-]*\d{2}[\s\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}\s*$"
+    )
+    uz_local_pattern = re.compile(
+        r"^\s*\(?\s*\d{2}\)?[\s\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}\s*$"
+    )
+
+    if not (uz_full_pattern.match(raw) or uz_local_pattern.match(raw)):
+        return None
+
+    digits = re.sub(r"\D", "", raw)
+
+    if digits.startswith("998") and len(digits) == 12:
+        return f"+{digits}"
+
+    if len(digits) == 9 and digits.startswith("9"):
+        return f"+998{digits}"
+
+    return None
+
+
+@router.message(RegistrationStates.full_name, F.text)
+async def registration_full_name(message: Message, state: FSMContext) -> None:
+    first_name, last_name = _split_full_name(message.text or "")
+    if not first_name or not last_name:
+        await message.answer("❌ Iltimos, ism va familiyangizni kiriting. Masalan: Aziz Rahimov")
+        return
+
+    await state.update_data(first_name=first_name, last_name=last_name)
+    await state.set_state(RegistrationStates.phone)
+    await message.answer("📱 Telefon raqamingizni quyidagi formatda kiriting: +998901234567")
+
+
+@router.message(RegistrationStates.full_name)
+async def registration_full_name_invalid(message: Message) -> None:
+    await message.answer("❌ Iltimos, to'liq ismingizni matn ko'rinishida yuboring. Masalan: Aziz Rahimov")
+
+
+@router.message(RegistrationStates.phone, F.text)
+async def registration_phone(message: Message, state: FSMContext) -> None:
+    phone_input = (message.text or "").strip()
+    normalized_phone = _normalize_phone_number(phone_input)
+    if not normalized_phone:
+        await message.answer(
+            "❌ Noto'g'ri telefon raqam formati. Iltimos, quyidagi formatlardan birini kiriting: "
+            "+998901234567 yoki 998901234567"
+        )
+        return
+
+    await state.update_data(phone=normalized_phone)
+    data = await state.get_data()
+    username = f"@{message.from_user.username}" if message.from_user.username else "(foydalanuvchi nomi yo'q)"
+
+    confirm_lines = [
+        "📋 **Ro'yxatdan o'tish ma'lumotlari:**",
+        f"👤 Ism: {data['first_name']} {data['last_name']}",
+        f"🔹 Foydalanuvchi nomi: {username}",
+        f"📱 Telefon: {normalized_phone}",
+        "",
+        "✅ Ro'yxatdan o'tishni tasdiqlaysizmi?",
+    ]
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Tasdiqlash", callback_data="reg_confirm")
+    builder.button(text="❌ Bekor qilish", callback_data="reg_cancel")
+    builder.adjust(2)
+
+    await state.set_state(RegistrationStates.confirm)
+    await message.answer("\n".join(confirm_lines), reply_markup=builder.as_markup())
+
+
+@router.message(RegistrationStates.phone)
+async def registration_phone_invalid(message: Message) -> None:
+    await message.answer(
+        "❌ Noto'g'ri telefon raqam formati. Iltimos, quyidagi formatlardan birini kiriting: "
+        "+998901234567 yoki 998901234567"
+    )
+
+
+@router.callback_query(lambda c: c.data == "reg_confirm")
+async def registration_confirm(
+        callback: CallbackQuery,
+        state: FSMContext,
+        session: AsyncSession,
+        db_user,
+) -> None:
+    data = await state.get_data()
+    profile = await upsert_profile(
+        session=session,
+        user_id=db_user.id,
+        first_name=data["first_name"],
+        last_name=data["last_name"],
+        phone=data["phone"],
+    )
+
+    await state.clear()
+    if profile.is_approved:
+        await callback.message.edit_text("✅ Profilingiz allaqachon tasdiqlangan.")
+        await callback.answer()
+        return
+
+    await callback.message.edit_text("✅ Ro'yxatdan o'tish so'rovingiz administratorga yuborildi.")
+    await notify_superusers_new_registration(session=session, bot=callback.bot, profile=profile)
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "reg_cancel")
+async def registration_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.edit_text("❌ Ro'yxatdan o'tish bekor qilindi. Qayta boshlash uchun /start bosing.")
+    await callback.answer()
+
+
 @router.message(Command("cancel"))
 async def cmd_cancel(
         message: Message,
@@ -409,7 +596,14 @@ async def cmd_cancel(
         return
 
     await state.clear()
-    keyboard = get_main_keyboard(is_superuser, is_teacher)
+    if not is_superuser and not is_teacher:
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="/start")]],
+            resize_keyboard=True,
+            input_field_placeholder="Komandani tanlang..."
+        )
+    else:
+        keyboard = get_main_keyboard(is_superuser, is_teacher)
     await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
 
 
@@ -417,6 +611,7 @@ async def cmd_cancel(
 async def handle_unknown_message(
         message: Message,
         state: FSMContext,
+        profile,
         is_superuser: bool = False,
         is_teacher: bool = False
 ) -> None:
@@ -431,7 +626,14 @@ async def handle_unknown_message(
     # Faqat tugmalar ro'yxatiga kirmagan xabarlar uchun
     if message.text and not message.text.startswith('/'):
         print(f"🔍 DEBUG: Unknown message: {message.text}")
-        keyboard = get_main_keyboard(is_superuser, is_teacher)
+        if profile is None and not is_superuser and not is_teacher:
+            keyboard = ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="/start")]],
+                resize_keyboard=True,
+                input_field_placeholder="Komandani tanlang..."
+            )
+        else:
+            keyboard = get_main_keyboard(is_superuser, is_teacher)
         await message.answer(
             "❌ Noto'g'ri buyruq.\n"
             "Iltimos, quyidagi tugmalardan foydalaning yoki /start bosing.",

@@ -7,8 +7,10 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from school_bot.bot.services.user_service import get_or_create_user
-from school_bot.database.models import UserRole
+from school_bot.database.models import Profile, UserRole
 
 
 class UserContextMiddleware(BaseMiddleware):
@@ -37,9 +39,23 @@ class UserContextMiddleware(BaseMiddleware):
             username=username  # YANGI: username parametri
         )
 
+        # Profilni olish (registratsiya/approval uchun)
+        result = await session.execute(select(Profile).where(Profile.user_id == db_user.id))
+        profile = result.scalar_one_or_none()
+
         # Superuser tekshirish
         is_superuser = (db_user.role == UserRole.superuser) or (tg_user.id in self._superuser_ids)
-        is_teacher = db_user.role == UserRole.teacher
+        is_teacher = False
+
+        if profile and profile.is_approved:
+            is_teacher = True
+            if db_user.role != UserRole.teacher and not is_superuser:
+                db_user.role = UserRole.teacher
+                await session.commit()
+                await session.refresh(db_user)
+        elif db_user.role == UserRole.teacher and profile is None:
+            # Legacy teacherlar uchun (profil bo'lmasa ham teacher ruxsatini saqlab qolamiz)
+            is_teacher = True
 
         # Agar user .env da superuser bo'lsa, database ni yangilash
         if tg_user.id in self._superuser_ids and db_user.role != UserRole.superuser:
@@ -53,6 +69,7 @@ class UserContextMiddleware(BaseMiddleware):
         data["db_user"] = db_user
         data["is_superuser"] = is_superuser
         data["is_teacher"] = is_teacher
+        data["profile"] = profile
 
         # DEBUG uchun: superuserligini tekshirish
         print(f"User: {tg_user.id}, username: {username}, is_superuser: {is_superuser}, role: {db_user.role}")

@@ -13,6 +13,7 @@ from school_bot.bot.middlewares.db_session import DbSessionMiddleware
 from school_bot.bot.middlewares.user_context import UserContextMiddleware
 from school_bot.database.session import create_session_factory, init_models
 from school_bot.bot.services.user_service import seed_superusers
+from school_bot.bot.services.group_service import seed_groups
 
 
 async def set_bot_commands(bot: Bot):
@@ -32,7 +33,10 @@ async def set_bot_commands(bot: Bot):
 
     # Superuserlar uchun qo'shimcha komandalar
     superuser_commands = [
-        BotCommand(command="add_teacher", description="O'qituvchi qo'shish"),
+        BotCommand(command="groups", description="Guruhlar ro'yxati"),
+        BotCommand(command="add_group", description="Guruh qo'shish"),
+        BotCommand(command="edit_group", description="Guruhni tahrirlash"),
+        BotCommand(command="remove_group", description="Guruhni o'chirish"),
         BotCommand(command="remove_teacher", description="O'qituvchini olib tashlash"),
         BotCommand(command="list_teachers", description="Barcha o'qituvchilar ro'yxati"),
         BotCommand(command="stats", description="Bot statistikasi"),
@@ -67,6 +71,7 @@ async def main() -> None:
     engine, session_factory = create_session_factory(settings.database_url)
     await init_models(engine)
     await seed_superusers(session_factory=session_factory, superuser_tg_ids=settings.superuser_ids)
+    await seed_groups(session_factory=session_factory, groups_fallback=settings.groups)
 
     # Bot yaratish
     bot = Bot(

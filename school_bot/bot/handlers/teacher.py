@@ -11,8 +11,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from school_bot.bot.config import Settings
 from school_bot.bot.services.poll_service import send_task_poll
+from school_bot.bot.services.group_service import list_groups, get_group_by_id, get_groups_by_names
 from school_bot.bot.services.task_service import create_task
 from school_bot.bot.states.new_task import NewTaskStates
 from school_bot.bot.states.book_order import BookOrderStates
@@ -28,24 +28,37 @@ os.makedirs(PHOTO_DIR, exist_ok=True)
 
 # ============== NEW TASK ==============
 @router.message(Command("new_task"))
-async def cmd_new_task(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
-    if not is_teacher:
-        await message.answer("⛔ Only teachers can create new tasks.")
+async def cmd_new_task(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    profile,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
+    if not (is_teacher or is_superuser):
+        await message.answer("⛔ Bu buyruq faqat tasdiqlangan o'qituvchilar uchun.")
         return
 
     await state.clear()
 
-    # Guruhlarni ko'rsatish
-    settings = Settings()
-    groups = settings.groups
+    # Guruhlarni ko'rsatish (faqat assigned guruhlar)
+    if is_superuser:
+        groups = await list_groups(session)
+    elif profile:
+        assigned_groups = profile.assigned_groups or []
+        groups = await get_groups_by_names(session, assigned_groups)
+    else:
+        # Legacy teacherlar uchun barcha guruhlar
+        groups = await list_groups(session)
 
     if not groups:
-        await message.answer("❌ Hech qanday guruh sozlanmagan. Administrator bilan bog'lanishingiz kerak.")
+        await message.answer("❌ Hech qanday guruh biriktirilmagan. Administrator bilan bog'lanishingiz kerak.")
         return
 
     builder = InlineKeyboardBuilder()
-    for group_name in groups.keys():
-        builder.button(text=group_name, callback_data=f"group_{group_name}")
+    for group in groups:
+        builder.button(text=group.name, callback_data=f"task_group:{group.id}")
     builder.adjust(1)
 
     await state.set_state(NewTaskStates.group_selection)
@@ -56,19 +69,34 @@ async def cmd_new_task(message: Message, state: FSMContext, is_teacher: bool = F
     )
 
 
-@router.callback_query(lambda c: c.data.startswith("group_"))
-async def process_group_selection(callback: CallbackQuery, state: FSMContext):
-    group_name = callback.data.replace("group_", "")
-    settings = Settings()
-    groups = settings.groups
-
-    if group_name not in groups:
+@router.callback_query(lambda c: c.data.startswith("task_group:"))
+async def process_group_selection(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    profile,
+    is_superuser: bool = False,
+):
+    try:
+        group_id = int(callback.data.split(":")[1])
+    except ValueError:
         await callback.answer("❌ Guruh topilmadi!")
         return
 
+    group = await get_group_by_id(session, group_id)
+    if not group:
+        await callback.answer("❌ Guruh topilmadi!")
+        return
+
+    if not is_superuser and profile:
+        allowed = set(profile.assigned_groups if profile else [])
+        if group.name not in allowed:
+            await callback.answer("⛔ Sizga bu guruh biriktirilmagan.")
+            return
+
     await state.update_data(
-        selected_group=group_name,
-        selected_group_id=groups[group_name]
+        selected_group=group.name,
+        selected_group_id=group.chat_id,
     )
 
     await state.set_state(NewTaskStates.topic)
@@ -79,18 +107,28 @@ async def process_group_selection(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(NewTaskStates.group_selection, Command("cancel"))
-async def cancel_group_selection(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
+async def cancel_group_selection(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
     """Guruh tanlash bosqichida cancel"""
     await state.clear()
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=is_teacher)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
     await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
 
 
 @router.message(NewTaskStates.topic, Command("cancel"))
-async def cancel_topic(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
+async def cancel_topic(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
     """Mavzu kiritish bosqichida cancel"""
     await state.clear()
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=is_teacher)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
     await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
 
 
@@ -109,10 +147,15 @@ async def process_topic(message: Message, state: FSMContext) -> None:
 
 
 @router.message(NewTaskStates.description, Command("cancel"))
-async def cancel_description(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
+async def cancel_description(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
     """Vazifa kiritish bosqichida cancel"""
     await state.clear()
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=is_teacher)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
     await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
 
 
@@ -134,10 +177,15 @@ async def process_description(message: Message, state: FSMContext) -> None:
 
 
 @router.message(NewTaskStates.photo, Command("cancel"))
-async def cancel_photo(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
+async def cancel_photo(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
     """Rasm yuklash bosqichida cancel"""
     await state.clear()
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=is_teacher)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
     await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
 
 
@@ -147,7 +195,8 @@ async def process_photo(
         state: FSMContext,
         bot,
         session: AsyncSession,
-        db_user
+        db_user,
+        is_superuser: bool = False,
 ) -> None:
     # Rasmni yuklab olish
     photo = message.photo[-1]  # Eng katta rasm
@@ -160,7 +209,7 @@ async def process_photo(
     await state.update_data(photo_path=file_name)
 
     # Rasm bilan yakunlash
-    await finish_task_with_photo(message, state, session, db_user)
+    await finish_task_with_photo(message, state, session, db_user, is_superuser)
 
 
 @router.message(NewTaskStates.photo, Command("skip"))
@@ -168,9 +217,10 @@ async def skip_photo(
         message: Message,
         state: FSMContext,
         session: AsyncSession,
-        db_user
+        db_user,
+        is_superuser: bool = False,
 ) -> None:
-    await finish_task_without_photo(message, state, session, db_user)
+    await finish_task_without_photo(message, state, session, db_user, is_superuser)
 
 
 @router.message(NewTaskStates.photo)
@@ -186,7 +236,8 @@ async def finish_task_with_photo(
         message: Message,
         state: FSMContext,
         session: AsyncSession,
-        db_user
+        db_user,
+        is_superuser: bool = False
 ) -> None:
     data = await state.get_data()
     topic = data["topic"]
@@ -234,12 +285,12 @@ async def finish_task_with_photo(
     await state.clear()
 
     # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=True)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=True)
     await message.answer(
         f"✅ Topshiriq muvaffaqiyatli yaratildi!\n\n"
         f"📌 Guruh: {group_name}\n"
         f"📸 Rasm qo'shildi.\n"
-        f"📊 Poll guruhga yuborildi.",
+        f"📊 So'rovnoma guruhga yuborildi.",
         reply_markup=keyboard
     )
 
@@ -248,7 +299,8 @@ async def finish_task_without_photo(
         message: Message,
         state: FSMContext,
         session: AsyncSession,
-        db_user
+        db_user,
+        is_superuser: bool = False
 ) -> None:
     data = await state.get_data()
     topic = data["topic"]
@@ -287,11 +339,11 @@ async def finish_task_without_photo(
     await state.clear()
 
     # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=True)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=True)
     await message.answer(
         f"✅ Topshiriq muvaffaqiyatli yaratildi!\n\n"
         f"📌 Guruh: {group_name}\n"
-        f"📊 Poll guruhga yuborildi.",
+        f"📊 So'rovnoma guruhga yuborildi.",
         reply_markup=keyboard
     )
 
@@ -308,9 +360,14 @@ async def invalid_description(message: Message) -> None:
 
 # ============== BOOK ORDER ==============
 @router.message(Command("order_book"))
-async def cmd_order_book(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
-    if not is_teacher:
-        await message.answer("⛔ Bu komanda faqat teacherlar uchun.")
+async def cmd_order_book(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
+    if not (is_teacher or is_superuser):
+        await message.answer("⛔ Bu komanda faqat o'qituvchilar uchun.")
         return
 
     await state.set_state(BookOrderStates.book_name)
@@ -322,10 +379,15 @@ async def cmd_order_book(message: Message, state: FSMContext, is_teacher: bool =
 
 
 @router.message(BookOrderStates.book_name, Command("cancel"))
-async def cancel_book_name(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
+async def cancel_book_name(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
     """Kitob nomi kiritish bosqichida cancel"""
     await state.clear()
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=is_teacher)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
     await message.answer("✅ Buyurtma bekor qilindi.", reply_markup=keyboard)
 
 
@@ -347,10 +409,15 @@ async def process_book_name(message: Message, state: FSMContext) -> None:
 
 
 @router.message(BookOrderStates.book_author, Command("cancel"))
-async def cancel_book_author(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
+async def cancel_book_author(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
     """Muallif kiritish bosqichida cancel"""
     await state.clear()
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=is_teacher)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
     await message.answer("✅ Buyurtma bekor qilindi.", reply_markup=keyboard)
 
 
@@ -378,10 +445,15 @@ async def skip_book_author(message: Message, state: FSMContext) -> None:
 
 
 @router.message(BookOrderStates.book_quantity, Command("cancel"))
-async def cancel_book_quantity(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
+async def cancel_book_quantity(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
     """Soni kiritish bosqichida cancel"""
     await state.clear()
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=is_teacher)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
     await message.answer("✅ Buyurtma bekor qilindi.", reply_markup=keyboard)
 
 
@@ -407,10 +479,15 @@ async def process_book_quantity(message: Message, state: FSMContext) -> None:
 
 
 @router.message(BookOrderStates.book_notes, Command("cancel"))
-async def cancel_book_notes(message: Message, state: FSMContext, is_teacher: bool = False) -> None:
+async def cancel_book_notes(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superuser: bool = False,
+) -> None:
     """Qo'shimcha ma'lumot kiritish bosqichida cancel"""
     await state.clear()
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=is_teacher)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
     await message.answer("✅ Buyurtma bekor qilindi.", reply_markup=keyboard)
 
 
@@ -469,7 +546,13 @@ async def show_order_confirmation(message: Message, state: FSMContext):
 
 
 @router.callback_query(lambda c: c.data == "order_confirm")
-async def confirm_order(callback: CallbackQuery, state: FSMContext, session: AsyncSession, db_user):
+async def confirm_order(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    db_user,
+    is_superuser: bool = False,
+):
     data = await state.get_data()
 
     book_name = data["book_name"]
@@ -509,13 +592,13 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext, session: Asy
     await state.clear()
 
     # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=True)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=True)
     await callback.message.answer("Asosiy menyu", reply_markup=keyboard)
     await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "order_cancel")
-async def cancel_order(callback: CallbackQuery, state: FSMContext, db_user):
+async def cancel_order(callback: CallbackQuery, state: FSMContext, db_user, is_superuser: bool = False):
     """Buyurtmani bekor qilish"""
     await state.clear()
     await callback.message.edit_text("❌ Buyurtma bekor qilindi.")
@@ -524,7 +607,7 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext, db_user):
     is_teacher = (db_user.role == UserRole.teacher) if db_user else True
 
     # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superuser=False, is_teacher=is_teacher)
+    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
     await callback.message.answer("Asosiy menyu", reply_markup=keyboard)
     await callback.answer()
 
