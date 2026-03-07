@@ -1,29 +1,72 @@
 from __future__ import annotations
-import logging
+import html
 import os
+import time
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, FSInputFile, CallbackQuery
+from aiogram.types import Message, FSInputFile, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, PollAnswer
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
 
 from school_bot.bot.services.poll_service import send_task_poll
 from school_bot.bot.services.group_service import list_groups, get_group_by_id, get_groups_by_names
 from school_bot.bot.services.task_service import create_task
 from school_bot.bot.states.new_task import NewTaskStates
-from school_bot.bot.states.book_order import BookOrderStates
-from school_bot.database.models import User, UserRole
+from school_bot.database.models import Task, PollVote
 from school_bot.bot.handlers.common import get_main_keyboard
+from school_bot.bot.services.logger_service import get_logger
+from school_bot.bot.services.user_service import get_or_create_user
 
 router = Router(name=__name__)
+logger = get_logger(__name__)
 
 # Rasm saqlanadigan papka
 PHOTO_DIR = "photos"
 os.makedirs(PHOTO_DIR, exist_ok=True)
+
+POLL_OPTIONS = [
+    "1️⃣ Juda yaxshi tushundi, mashqlarni mustaqil bajara olmoqda.",
+    "2️⃣ Biroz tushundi, lekin yana ko'proq mashq qilish kerak.",
+    "3️⃣ Mavzuni tushundi, ammo mashq bajarishda qiynalmoqda.",
+    "4️⃣ Umuman tushunmadi.",
+]
+
+
+def get_cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="❌ Bekor qilish")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Tanlang..."
+    )
+
+
+def get_skip_cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="⏭️ O'tkazib yuborish"), KeyboardButton(text="❌ Bekor qilish")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Tanlang..."
+    )
+
+
+@router.message(StateFilter(NewTaskStates), Command("cancel"))
+@router.message(StateFilter(NewTaskStates), F.text == "❌ Bekor qilish")
+async def cancel_new_task(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    """Cancel new task creation from any NewTaskStates step."""
+    await state.clear()
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher or is_superadmin)
+    await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
 
 
 # ============== NEW TASK ==============
@@ -34,16 +77,21 @@ async def cmd_new_task(
     session: AsyncSession,
     profile,
     is_teacher: bool = False,
-    is_superuser: bool = False,
+    is_superadmin: bool = False,
 ) -> None:
-    if not (is_teacher or is_superuser):
+    start_time = time.time()
+    if not (is_teacher or is_superadmin):
         await message.answer("⛔ Bu buyruq faqat tasdiqlangan o'qituvchilar uchun.")
         return
 
     await state.clear()
+    logger.info(
+        f"Foydalanuvchi /new_task ni ishga tushirdi: {message.from_user.id}",
+        extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "new_task"},
+    )
 
     # Guruhlarni ko'rsatish (faqat assigned guruhlar)
-    if is_superuser:
+    if is_superadmin:
         groups = await list_groups(session)
     elif profile:
         assigned_groups = profile.assigned_groups or []
@@ -67,6 +115,11 @@ async def cmd_new_task(
         "❌ Bekor qilish uchun /cancel bosing",
         reply_markup=builder.as_markup()
     )
+    execution_time = time.time() - start_time
+    logger.info(
+        f"/new_task bajarildi: {execution_time:.2f}s",
+        extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "new_task", "exec_ms": int(execution_time * 1000)},
+    )
 
 
 @router.callback_query(lambda c: c.data.startswith("task_group:"))
@@ -75,7 +128,7 @@ async def process_group_selection(
     state: FSMContext,
     session: AsyncSession,
     profile,
-    is_superuser: bool = False,
+    is_superadmin: bool = False,
 ):
     try:
         group_id = int(callback.data.split(":")[1])
@@ -88,9 +141,13 @@ async def process_group_selection(
         await callback.answer("❌ Guruh topilmadi!")
         return
 
-    if not is_superuser and profile:
+    if not is_superadmin and profile:
         allowed = set(profile.assigned_groups if profile else [])
         if group.name not in allowed:
+            logger.warning(
+                f"Guruh ruxsati yo'q: {group.name}",
+                extra={"user_id": callback.from_user.id, "chat_id": callback.message.chat.id, "command": "new_task"},
+            )
             await callback.answer("⛔ Sizga bu guruh biriktirilmagan.")
             return
 
@@ -102,34 +159,10 @@ async def process_group_selection(
     await state.set_state(NewTaskStates.topic)
     await callback.message.delete()
     await callback.message.answer(
-        "📌 Mavzuni kiriting: \n\n❌ Bekor qilish uchun /cancel bosing")
+        "📌 Mavzuni kiriting: \n\n❌ Bekor qilish uchun /cancel bosing",
+        reply_markup=get_cancel_keyboard(),
+    )
     await callback.answer()
-
-
-@router.message(NewTaskStates.group_selection, Command("cancel"))
-async def cancel_group_selection(
-    message: Message,
-    state: FSMContext,
-    is_teacher: bool = False,
-    is_superuser: bool = False,
-) -> None:
-    """Guruh tanlash bosqichida cancel"""
-    await state.clear()
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
-    await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
-
-
-@router.message(NewTaskStates.topic, Command("cancel"))
-async def cancel_topic(
-    message: Message,
-    state: FSMContext,
-    is_teacher: bool = False,
-    is_superuser: bool = False,
-) -> None:
-    """Mavzu kiritish bosqichida cancel"""
-    await state.clear()
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
-    await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
 
 
 @router.message(NewTaskStates.topic, F.text)
@@ -137,26 +170,19 @@ async def process_topic(message: Message, state: FSMContext) -> None:
     """Mavzu kiritishni qayta ishlash"""
     topic = (message.text or "").strip()
     if not topic:
+        logger.warning(
+            "Bo'sh mavzu kiritildi",
+            extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "new_task"},
+        )
         await message.answer("Mavzu bo'sh bo'lishi mumkin emas. Qayta kiriting:")
         return
 
     await state.update_data(topic=topic)
     await state.set_state(NewTaskStates.description)
     await message.answer(
-        "🏠 Uyga vazifani kiriting: \n\n❌ Bekor qilish uchun /cancel bosing")
-
-
-@router.message(NewTaskStates.description, Command("cancel"))
-async def cancel_description(
-    message: Message,
-    state: FSMContext,
-    is_teacher: bool = False,
-    is_superuser: bool = False,
-) -> None:
-    """Vazifa kiritish bosqichida cancel"""
-    await state.clear()
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
-    await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
+        "🏠 Uyga vazifani kiriting: \n\n❌ Bekor qilish uchun /cancel bosing",
+        reply_markup=get_cancel_keyboard(),
+    )
 
 
 @router.message(NewTaskStates.description, F.text)
@@ -164,29 +190,65 @@ async def process_description(message: Message, state: FSMContext) -> None:
     """Vazifa kiritishni qayta ishlash"""
     description = (message.text or "").strip()
     if not description:
+        logger.warning(
+            "Bo'sh vazifa kiritildi",
+            extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "new_task"},
+        )
         await message.answer("Vazifa bo'sh bo'lishi mumkin emas. Qayta kiriting:")
         return
 
     await state.update_data(description=description)
-    await state.set_state(NewTaskStates.photo)
+    await state.set_state(NewTaskStates.notes)
     await message.answer(
-        "📸 Rasm jo'natishingiz mumkin (ixtiyoriy).\n"
-        "Agar rasm kerak bo'lmasa /skip ni bosing.\n"
-        "Bekor qilish uchun /cancel bosing."
+        "📝 Qo'shimcha izoh (ixtiyoriy):\n"
+        "Masalan: ertaga muhokama qilamiz, darsda tekshiriladi\n\n"
+        "⏭️ O'tkazib yuborish tugmasini bosing\n"
+        "❌ Bekor qilish tugmasini bosing.",
+        reply_markup=get_skip_cancel_keyboard(),
     )
 
 
-@router.message(NewTaskStates.photo, Command("cancel"))
-async def cancel_photo(
+@router.message(NewTaskStates.notes, Command("skip"))
+async def skip_notes(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    """Izohni o'tkazib yuborish"""
+    await state.update_data(notes=None)
+    await state.set_state(NewTaskStates.photo)
+    await message.answer(
+        "📸 Rasm jo'natishingiz mumkin (ixtiyoriy).\n"
+        "⏭️ O'tkazib yuborish tugmasini bosing.\n"
+        "❌ Bekor qilish tugmasini bosing.",
+        reply_markup=get_skip_cancel_keyboard(),
+    )
+
+
+@router.message(NewTaskStates.notes, F.text == "⏭️ O'tkazib yuborish")
+async def skip_notes_button(message: Message, state: FSMContext) -> None:
+    await skip_notes(message, state)
+
+
+@router.message(NewTaskStates.notes, F.text)
+async def process_notes(
     message: Message,
     state: FSMContext,
     is_teacher: bool = False,
-    is_superuser: bool = False,
+    is_superadmin: bool = False,
 ) -> None:
-    """Rasm yuklash bosqichida cancel"""
-    await state.clear()
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
-    await message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
+    text = (message.text or "").strip()
+    if text in ("/skip", "⏭️ O'tkazib yuborish"):
+        await skip_notes(message, state)
+        return
+
+    await state.update_data(notes=text or None)
+    await state.set_state(NewTaskStates.photo)
+    await message.answer(
+        "📸 Rasm jo'natishingiz mumkin (ixtiyoriy).\n"
+        "⏭️ O'tkazib yuborish tugmasini bosing.\n"
+        "❌ Bekor qilish tugmasini bosing.",
+        reply_markup=get_skip_cancel_keyboard(),
+    )
 
 
 @router.message(NewTaskStates.photo, F.photo)
@@ -196,7 +258,7 @@ async def process_photo(
         bot,
         session: AsyncSession,
         db_user,
-        is_superuser: bool = False,
+        is_superadmin: bool = False,
 ) -> None:
     # Rasmni yuklab olish
     photo = message.photo[-1]  # Eng katta rasm
@@ -209,7 +271,7 @@ async def process_photo(
     await state.update_data(photo_path=file_name)
 
     # Rasm bilan yakunlash
-    await finish_task_with_photo(message, state, session, db_user, is_superuser)
+    await finish_task_with_photo(message, state, session, db_user, is_superadmin)
 
 
 @router.message(NewTaskStates.photo, Command("skip"))
@@ -218,17 +280,29 @@ async def skip_photo(
         state: FSMContext,
         session: AsyncSession,
         db_user,
-        is_superuser: bool = False,
+        is_superadmin: bool = False,
 ) -> None:
-    await finish_task_without_photo(message, state, session, db_user, is_superuser)
+    await finish_task_without_photo(message, state, session, db_user, is_superadmin)
+
+
+@router.message(NewTaskStates.photo, F.text == "⏭️ O'tkazib yuborish")
+async def skip_photo_button(
+        message: Message,
+        state: FSMContext,
+        session: AsyncSession,
+        db_user,
+        is_superadmin: bool = False,
+) -> None:
+    await finish_task_without_photo(message, state, session, db_user, is_superadmin)
 
 
 @router.message(NewTaskStates.photo)
 async def invalid_photo(message: Message) -> None:
+    if message.text and message.text.strip() in ("/cancel", "❌ /cancel", "❌ Bekor qilish"):
+        return
     await message.answer(
-        "Iltimos, rasm yuboring yoki /skip bosing.\n"
-        "Agar rasm kerak bo'lmasa /skip ni bosing.\n"
-        "Bekor qilish uchun /cancel bosing."
+        "Iltimos, rasm yuboring yoki ⏭️ O'tkazib yuborish tugmasini bosing.\n"
+        "❌ Bekor qilish tugmasini bosing."
     )
 
 
@@ -237,11 +311,12 @@ async def finish_task_with_photo(
         state: FSMContext,
         session: AsyncSession,
         db_user,
-        is_superuser: bool = False
+        is_superadmin: bool = False
 ) -> None:
     data = await state.get_data()
     topic = data["topic"]
     description = data["description"]
+    notes = data.get("notes")
     photo_path = data.get("photo_path")
     group_id = data["selected_group_id"]
     group_name = data["selected_group"]
@@ -254,21 +329,14 @@ async def finish_task_with_photo(
             photo=photo
         )
 
-    # Poll variantlari
-    poll_options = [
-        "1️⃣ Juda yaxshi tushundi, mashqlarni mustaqil bajara olmoqda.",
-        "2️⃣ Biroz tushundi, lekin yana ko'proq mashq qilish kerak.",
-        "3️⃣ Mavzuni tushundi, ammo mashq bajarishda qiynalmoqda.",
-        "4️⃣ Umuman tushunmadi."
-    ]
-
     # Poll yuboramiz
     poll_message = await send_task_poll(
         bot=message.bot,
         group_chat_id=group_id,
         topic=topic,
         description=description,
-        poll_options=poll_options,
+        notes=notes,
+        poll_options=POLL_OPTIONS,
     )
 
     # Database ga saqlash
@@ -278,14 +346,18 @@ async def finish_task_with_photo(
         topic=topic,
         description=description,
         poll_message_id=poll_message.message_id,
+        poll_id=poll_message.poll.id if poll_message.poll else None,
     )
 
-    logging.info(f"Task created: ID={task.id}, Teacher={db_user.telegram_id}, Topic={topic}, Group={group_name}")
+    logger.info(
+        f"Topshiriq yaratildi: ID={task.id}, Teacher={db_user.telegram_id}, Topic={topic}, Group={group_name}",
+        extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "new_task"},
+    )
 
     await state.clear()
 
     # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=True)
     await message.answer(
         f"✅ Topshiriq muvaffaqiyatli yaratildi!\n\n"
         f"📌 Guruh: {group_name}\n"
@@ -300,21 +372,14 @@ async def finish_task_without_photo(
         state: FSMContext,
         session: AsyncSession,
         db_user,
-        is_superuser: bool = False
+        is_superadmin: bool = False
 ) -> None:
     data = await state.get_data()
     topic = data["topic"]
     description = data["description"]
+    notes = data.get("notes")
     group_id = data["selected_group_id"]
     group_name = data["selected_group"]
-
-    # Poll variantlari
-    poll_options = [
-        "1️⃣ Juda yaxshi tushundi, mashqlarni mustaqil bajara olmoqda.",
-        "2️⃣ Biroz tushundi, lekin yana ko'proq mashq qilish kerak.",
-        "3️⃣ Mavzuni tushundi, ammo mashq bajarishda qiynalmoqda.",
-        "4️⃣ Umuman tushunmadi."
-    ]
 
     # Poll yuboramiz
     poll_message = await send_task_poll(
@@ -322,7 +387,8 @@ async def finish_task_without_photo(
         group_chat_id=group_id,
         topic=topic,
         description=description,
-        poll_options=poll_options,
+        notes=notes,
+        poll_options=POLL_OPTIONS,
     )
 
     # Database ga saqlash
@@ -332,14 +398,18 @@ async def finish_task_without_photo(
         topic=topic,
         description=description,
         poll_message_id=poll_message.message_id,
+        poll_id=poll_message.poll.id if poll_message.poll else None,
     )
 
-    logging.info(f"Task created: ID={task.id}, Teacher={db_user.telegram_id}, Topic={topic}, Group={group_name}")
+    logger.info(
+        f"Topshiriq yaratildi: ID={task.id}, Teacher={db_user.telegram_id}, Topic={topic}, Group={group_name}",
+        extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "new_task"},
+    )
 
     await state.clear()
 
     # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=True)
     await message.answer(
         f"✅ Topshiriq muvaffaqiyatli yaratildi!\n\n"
         f"📌 Guruh: {group_name}\n"
@@ -350,273 +420,228 @@ async def finish_task_without_photo(
 
 @router.message(NewTaskStates.topic)
 async def invalid_topic(message: Message) -> None:
+    if message.text and message.text.strip() in ("/cancel", "❌ /cancel", "❌ Bekor qilish"):
+        return
     await message.answer("Iltimos, mavzuni matn ko'rinishida yuboring:")
 
 
 @router.message(NewTaskStates.description)
 async def invalid_description(message: Message) -> None:
+    if message.text and message.text.strip() in ("/cancel", "❌ /cancel", "❌ Bekor qilish"):
+        return
     await message.answer("Iltimos, vazifani matn ko'rinishida yuboring:")
 
 
-# ============== BOOK ORDER ==============
-@router.message(Command("order_book"))
-async def cmd_order_book(
+@router.message(NewTaskStates.notes)
+async def invalid_notes(message: Message) -> None:
+    if message.text and message.text.strip() in ("/cancel", "❌ /cancel", "❌ Bekor qilish"):
+        return
+    await message.answer(
+        "Iltimos, izohni matn ko'rinishida yuboring yoki ⏭️ O'tkazib yuborish tugmasini bosing."
+    )
+
+
+@router.poll_answer()
+async def handle_poll_answer(poll_answer: PollAnswer, session: AsyncSession) -> None:
+    poll_id = poll_answer.poll_id
+    if not poll_id:
+        return
+
+    task_res = await session.execute(
+        select(Task).where(Task.poll_id == poll_id)
+    )
+    task = task_res.scalar_one_or_none()
+    if not task:
+        return
+
+    tg_user = poll_answer.user
+    full_name = " ".join(
+        part for part in [tg_user.first_name, tg_user.last_name] if part
+    ).strip() or None
+    user = await get_or_create_user(
+        session=session,
+        telegram_id=tg_user.id,
+        full_name=full_name,
+        username=tg_user.username,
+    )
+
+    await session.execute(
+        delete(PollVote).where(
+            PollVote.poll_id == poll_id,
+            PollVote.user_id == user.id,
+        )
+    )
+
+    if not poll_answer.option_ids:
+        await session.commit()
+        return
+
+    votes: list[PollVote] = []
+    for option_id in poll_answer.option_ids:
+        option_text = (
+            POLL_OPTIONS[option_id]
+            if option_id < len(POLL_OPTIONS)
+            else f"Variant {option_id + 1}"
+        )
+        votes.append(
+            PollVote(
+                poll_message_id=task.poll_message_id,
+                poll_id=poll_id,
+                task_id=task.id,
+                user_id=user.id,
+                option_id=option_id,
+                option_text=option_text,
+            )
+        )
+
+    session.add_all(votes)
+    await session.commit()
+
+
+@router.message(Command("poll_voters"))
+async def cmd_poll_voters(
     message: Message,
+    session: AsyncSession,
     state: FSMContext,
+    db_user,
+    command: CommandObject | None = None,
     is_teacher: bool = False,
-    is_superuser: bool = False,
+    is_superadmin: bool = False,
 ) -> None:
-    if not (is_teacher or is_superuser):
+    if not is_teacher or is_superadmin:
         await message.answer("⛔ Bu komanda faqat o'qituvchilar uchun.")
         return
 
-    await state.set_state(BookOrderStates.book_name)
-    await message.answer(
-        "📚 Kitob nomini kiriting:\n"
-        "Masalan: Python asoslari\n\n"
-        "❌ Bekor qilish uchun /cancel bosing"
-    )
+    args = command.args if command else None
+    if not args:
+        stmt = select(Task).order_by(Task.created_at.desc()).limit(5)
+        if not is_superadmin:
+            stmt = stmt.where(Task.teacher_id == db_user.id)
+        tasks = (await session.execute(stmt)).scalars().all()
 
-
-@router.message(BookOrderStates.book_name, Command("cancel"))
-async def cancel_book_name(
-    message: Message,
-    state: FSMContext,
-    is_teacher: bool = False,
-    is_superuser: bool = False,
-) -> None:
-    """Kitob nomi kiritish bosqichida cancel"""
-    await state.clear()
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
-    await message.answer("✅ Buyurtma bekor qilindi.", reply_markup=keyboard)
-
-
-@router.message(BookOrderStates.book_name, F.text)
-async def process_book_name(message: Message, state: FSMContext) -> None:
-    book_name = (message.text or "").strip()
-    if not book_name:
-        await message.answer("❌ Kitob nomi bo'sh bo'lishi mumkin emas. Qayta kiriting:")
-        return
-
-    await state.update_data(book_name=book_name)
-    await state.set_state(BookOrderStates.book_author)
-    await message.answer(
-        "✍️ Muallifni kiriting (ixtiyoriy):\n"
-        "Masalan: Anvar Narzullayev\n\n"
-        "O'tkazib yuborish uchun /skip bosing\n"
-        "❌ Bekor qilish uchun /cancel bosing"
-    )
-
-
-@router.message(BookOrderStates.book_author, Command("cancel"))
-async def cancel_book_author(
-    message: Message,
-    state: FSMContext,
-    is_teacher: bool = False,
-    is_superuser: bool = False,
-) -> None:
-    """Muallif kiritish bosqichida cancel"""
-    await state.clear()
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
-    await message.answer("✅ Buyurtma bekor qilindi.", reply_markup=keyboard)
-
-
-@router.message(BookOrderStates.book_author, F.text)
-async def process_book_author(message: Message, state: FSMContext) -> None:
-    author = (message.text or "").strip()
-    await state.update_data(book_author=author or None)
-    await state.set_state(BookOrderStates.book_quantity)
-    await message.answer(
-        "🔢 Nechta nusxa kerak? (son kiriting):\n"
-        "Masalan: 5\n\n"
-        "❌ Bekor qilish uchun /cancel bosing"
-    )
-
-
-@router.message(BookOrderStates.book_author, Command("skip"))
-async def skip_book_author(message: Message, state: FSMContext) -> None:
-    await state.update_data(book_author=None)
-    await state.set_state(BookOrderStates.book_quantity)
-    await message.answer(
-        "🔢 Nechta nusxa kerak? (son kiriting):\n"
-        "Masalan: 5\n\n"
-        "❌ Bekor qilish uchun /cancel bosing"
-    )
-
-
-@router.message(BookOrderStates.book_quantity, Command("cancel"))
-async def cancel_book_quantity(
-    message: Message,
-    state: FSMContext,
-    is_teacher: bool = False,
-    is_superuser: bool = False,
-) -> None:
-    """Soni kiritish bosqichida cancel"""
-    await state.clear()
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
-    await message.answer("✅ Buyurtma bekor qilindi.", reply_markup=keyboard)
-
-
-@router.message(BookOrderStates.book_quantity, F.text)
-async def process_book_quantity(message: Message, state: FSMContext) -> None:
-    try:
-        quantity = int(message.text.strip())
-        if quantity < 1 or quantity > 100:
-            await message.answer("❌ 1 dan 100 gacha son kiriting:")
+        if not tasks:
+            await message.answer("📭 Siz hali hech qanday topshiriq yaratmagansiz.")
             return
-    except ValueError:
-        await message.answer("❌ Iltimos, to'g'ri son kiriting:")
+
+        builder = InlineKeyboardBuilder()
+        for task in tasks:
+            date = task.created_at.strftime("%d.%m")
+            topic = task.topic or "Topshiriq"
+            short_topic = topic[:20] + ("..." if len(topic) > 20 else "")
+            builder.button(
+                text=f"{date}: {short_topic}",
+                callback_data=f"poll_voters:{task.id}",
+            )
+        builder.adjust(1)
+
+        await message.answer(
+            "📊 Qaysi topshiriq uchun ovozlarni ko'rmoqchisiz?",
+            reply_markup=builder.as_markup(),
+        )
         return
 
-    await state.update_data(book_quantity=quantity)
-    await state.set_state(BookOrderStates.book_notes)
-    await message.answer(
-        "📝 Qo'shimcha ma'lumot (ixtiyoriy):\n"
-        "Masalan: 7-sinf uchun, qattiq muqovada\n\n"
-        "O'tkazib yuborish uchun /skip bosing\n"
-        "❌ Bekor qilish uchun /cancel bosing"
-    )
+    try:
+        task_id = int(args)
+    except ValueError:
+        await message.answer("❌ Noto'g'ri format. Iltimos, topshiriq ID sini kiriting.")
+        return
+
+    await show_poll_voters(message, session, task_id, db_user.id, is_superadmin)
 
 
-@router.message(BookOrderStates.book_notes, Command("cancel"))
-async def cancel_book_notes(
-    message: Message,
-    state: FSMContext,
-    is_teacher: bool = False,
-    is_superuser: bool = False,
-) -> None:
-    """Qo'shimcha ma'lumot kiritish bosqichida cancel"""
-    await state.clear()
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
-    await message.answer("✅ Buyurtma bekor qilindi.", reply_markup=keyboard)
-
-
-@router.message(BookOrderStates.book_notes, F.text)
-async def process_book_notes(message: Message, state: FSMContext) -> None:
-    notes = (message.text or "").strip()
-    await state.update_data(book_notes=notes or None)
-    await show_order_confirmation(message, state)
-
-
-@router.message(BookOrderStates.book_notes, Command("skip"))
-async def skip_book_notes(message: Message, state: FSMContext) -> None:
-    await state.update_data(book_notes=None)
-    await show_order_confirmation(message, state)
-
-
-async def show_order_confirmation(message: Message, state: FSMContext):
-    data = await state.get_data()
-
-    book_name = data["book_name"]
-    author = data.get("book_author")
-    quantity = data["book_quantity"]
-    notes = data.get("book_notes")
-
-    # Tasdiqlash matni
-    confirm_text = [
-        "📋 **Kitob buyurtma ma'lumotlari:**",
-        f"📚 Kitob: {book_name}",
-    ]
-
-    if author:
-        confirm_text.append(f"✍️ Muallif: {author}")
-
-    confirm_text.append(f"🔢 Soni: {quantity} ta")
-
-    if notes:
-        confirm_text.append(f"📝 Qo'shimcha: {notes}")
-
-    confirm_text.extend([
-        "",
-        "✅ Buyurtmani tasdiqlaysizmi?",
-        "❌ Bekor qilish"
-    ])
-
-    # Inline keyboard
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Tasdiqlash", callback_data="order_confirm")
-    builder.button(text="❌ Bekor qilish", callback_data="order_cancel")
-    builder.adjust(2)
-
-    await state.set_state(BookOrderStates.confirm)
-    await message.answer(
-        "\n".join(confirm_text),
-        reply_markup=builder.as_markup()
-    )
-
-
-@router.callback_query(lambda c: c.data == "order_confirm")
-async def confirm_order(
+@router.callback_query(lambda c: c.data.startswith("poll_voters:"))
+async def poll_voters_callback(
     callback: CallbackQuery,
-    state: FSMContext,
     session: AsyncSession,
     db_user,
-    is_superuser: bool = False,
-):
-    data = await state.get_data()
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    if not (is_teacher or is_superadmin):
+        await callback.answer("⛔ Bu amal faqat o'qituvchilar uchun.", show_alert=True)
+        return
 
-    book_name = data["book_name"]
-    author = data.get("book_author", "Noma'lum")
-    quantity = data["book_quantity"]
-    notes = data.get("book_notes", "Yo'q")
+    try:
+        task_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer("❌ Noto'g'ri ID", show_alert=True)
+        return
 
-    # Barcha superuserlarni olish
-    result = await session.execute(
-        select(User).where(User.role == UserRole.superuser)
-    )
-    superusers = result.scalars().all()
-
-    # Superuserlarga xabar yuborish
-    order_message = (
-        f"📚 **YANGI KITOB BUYURTMA**\n\n"
-        f"👨‍🏫 O'qituvchi: {db_user.full_name or db_user.telegram_id}\n"
-        f"📖 Kitob: {book_name}\n"
-        f"✍️ Muallif: {author}\n"
-        f"🔢 Soni: {quantity} ta\n"
-        f"📝 Qo'shimcha: {notes}\n\n"
-        f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-    )
-
-    # Har bir superuserga yuborish
-    for superuser in superusers:
-        try:
-            await callback.bot.send_message(
-                chat_id=superuser.telegram_id,
-                text=order_message
-            )
-            logging.info(f"Buyurtma superuserga yuborildi: {superuser.telegram_id}")
-        except Exception as e:
-            logging.error(f"Superuserga yuborishda xatolik {superuser.telegram_id}: {e}")
-
-    await callback.message.edit_text("✅ Buyurtma muvaffaqiyatli yuborildi! Administratorlar xabarni oldi.")
-    await state.clear()
-
-    # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=True)
-    await callback.message.answer("Asosiy menyu", reply_markup=keyboard)
+    await callback.message.delete()
+    await show_poll_voters(callback.message, session, task_id, db_user.id, is_superadmin)
     await callback.answer()
 
 
-@router.callback_query(lambda c: c.data == "order_cancel")
-async def cancel_order(callback: CallbackQuery, state: FSMContext, db_user, is_superuser: bool = False):
-    """Buyurtmani bekor qilish"""
-    await state.clear()
-    await callback.message.edit_text("❌ Buyurtma bekor qilindi.")
+def format_poll_voters(task: Task) -> str:
+    votes_by_option: dict[int, list[PollVote]] = {}
+    for vote in task.poll_votes:
+        votes_by_option.setdefault(vote.option_id, []).append(vote)
 
-    # Foydalanuvchi teacher ekanligini tekshirish
-    is_teacher = (db_user.role == UserRole.teacher) if db_user else True
+    safe_topic = html.escape(task.topic or "")
+    safe_description = html.escape(task.description or "")
+    lines = [
+        f"📊 <b>Topshiriq: {safe_topic}</b>",
+        f"📅 {task.created_at.strftime('%d.%m.%Y %H:%M')}",
+    ]
+    if safe_description:
+        lines.append(f"📝 {safe_description}")
+    lines.extend(
+        [
+            "",
+            f"<b>Jami ovozlar: {len(task.poll_votes)} ta</b>",
+        ]
+    )
 
-    # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superuser=is_superuser, is_teacher=is_teacher or is_superuser)
-    await callback.message.answer("Asosiy menyu", reply_markup=keyboard)
-    await callback.answer()
+    for option_id in sorted(votes_by_option.keys()):
+        votes = sorted(votes_by_option[option_id], key=lambda v: v.voted_at or datetime.min)
+        option_text = (
+            POLL_OPTIONS[option_id]
+            if option_id < len(POLL_OPTIONS)
+            else f"Variant {option_id + 1}"
+        )
+        lines.append("")
+        lines.append(f"<b>{html.escape(option_text)}</b> ({len(votes)} ta):")
+
+        for vote in votes[:10]:
+            user = vote.user
+            name = user.full_name or f"Foydalanuvchi {user.telegram_id}"
+            username = f" (@{user.username})" if user.username else ""
+            time_str = vote.voted_at.strftime("%H:%M") if vote.voted_at else ""
+            lines.append(f"• {html.escape(name)}{html.escape(username)} - {time_str}")
+
+        if len(votes) > 10:
+            lines.append(f"... va yana {len(votes) - 10} ta")
+
+    return "\n".join(lines)
 
 
-@router.message(BookOrderStates.book_name)
-async def invalid_book_name(message: Message) -> None:
-    await message.answer("❌ Iltimos, kitob nomini matn ko'rinishida yuboring.")
+async def show_poll_voters(
+    message: Message,
+    session: AsyncSession,
+    task_id: int,
+    teacher_id: int,
+    is_superadmin: bool = False,
+) -> None:
+    stmt = (
+        select(Task)
+        .where(Task.id == task_id)
+        .options(selectinload(Task.poll_votes).selectinload(PollVote.user))
+    )
+    if not is_superadmin:
+        stmt = stmt.where(Task.teacher_id == teacher_id)
 
+    task = (await session.execute(stmt)).scalar_one_or_none()
+    if not task:
+        await message.answer("❌ Topshiriq topilmadi yoki sizga tegishli emas.")
+        return
 
-@router.message(BookOrderStates.book_quantity)
-async def invalid_book_quantity(message: Message) -> None:
-    await message.answer("❌ Iltimos, to'g'ri son kiriting.")
+    if not task.poll_id:
+        await message.answer("📭 Bu topshiriq uchun so'rovnoma yo'q.")
+        return
+
+    if not task.poll_votes:
+        await message.answer("📭 Bu topshiriq uchun hali ovoz berilmagan.")
+        return
+
+    text = format_poll_voters(task)
+    await message.answer(text)

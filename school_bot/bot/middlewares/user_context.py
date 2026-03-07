@@ -11,11 +11,29 @@ from sqlalchemy import select
 
 from school_bot.bot.services.user_service import get_or_create_user
 from school_bot.database.models import Profile, UserRole
+from school_bot.bot.services.logger_service import get_logger
+
+logger = get_logger(__name__)
 
 
 class UserContextMiddleware(BaseMiddleware):
-    def __init__(self, superuser_ids: list[int]) -> None:
-        self._superuser_ids = set(superuser_ids)
+    def __init__(self, superadmin_ids: list[int], teacher_ids: list[int], admin_group_id: int | None) -> None:
+        normalized_ids: set[int] = set()
+        for raw_id in superadmin_ids:
+            try:
+                normalized_ids.add(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+        self._superadmin_ids = normalized_ids
+        normalized_teacher_ids: set[int] = set()
+        for raw_id in teacher_ids:
+            try:
+                normalized_teacher_ids.add(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+        self._teacher_ids = normalized_teacher_ids
+        self._admin_group_id = admin_group_id
+        logger.info(f"SUPERADMIN IDS from env: {sorted(self._superadmin_ids)}")
 
     async def __call__(
             self,
@@ -43,35 +61,59 @@ class UserContextMiddleware(BaseMiddleware):
         result = await session.execute(select(Profile).where(Profile.user_id == db_user.id))
         profile = result.scalar_one_or_none()
 
-        # Superuser tekshirish
-        is_superuser = (db_user.role == UserRole.superuser) or (tg_user.id in self._superuser_ids)
+        # Superadmin tekshirish
+        is_superadmin = (db_user.role == UserRole.superadmin) or (tg_user.id in self._superadmin_ids)
         is_teacher = False
+        is_student = False
+        is_group_admin = False
+        is_librarian = db_user.role == UserRole.librarian
+
+        if self._admin_group_id:
+            try:
+                bot = data.get("bot")
+                if bot:
+                    admins = await bot.get_chat_administrators(self._admin_group_id)
+                    is_group_admin = any(admin.user.id == tg_user.id for admin in admins)
+            except Exception:
+                logger.warning("Failed to check group admins", exc_info=True)
 
         if profile and profile.is_approved:
-            is_teacher = True
-            if db_user.role != UserRole.teacher and not is_superuser:
-                db_user.role = UserRole.teacher
-                await session.commit()
-                await session.refresh(db_user)
+            if (profile.profile_type or "teacher") == "teacher":
+                is_teacher = True
+                if db_user.role != UserRole.teacher and not is_superadmin and db_user.role != UserRole.librarian:
+                    db_user.role = UserRole.teacher
+                    await session.commit()
+                    await session.refresh(db_user)
+            elif profile.profile_type == "student":
+                is_student = True
         elif db_user.role == UserRole.teacher and profile is None:
             # Legacy teacherlar uchun (profil bo'lmasa ham teacher ruxsatini saqlab qolamiz)
             is_teacher = True
+        elif tg_user.id in self._teacher_ids:
+            is_teacher = True
+        elif is_group_admin:
+            is_teacher = True
 
-        # Agar user .env da superuser bo'lsa, database ni yangilash
-        if tg_user.id in self._superuser_ids and db_user.role != UserRole.superuser:
-            db_user.role = UserRole.superuser
+        # Agar user .env da superadmin bo'lsa, database ni yangilash
+        if tg_user.id in self._superadmin_ids and db_user.role != UserRole.superadmin:
+            db_user.role = UserRole.superadmin
             await session.commit()
             await session.refresh(db_user)
-            is_superuser = True
+            is_superadmin = True
             is_teacher = False
+            is_librarian = False
 
         # Ma'lumotlarni data ga qo'shish
         data["db_user"] = db_user
-        data["is_superuser"] = is_superuser
+        data["is_superadmin"] = is_superadmin
         data["is_teacher"] = is_teacher
+        data["is_librarian"] = is_librarian
+        data["is_student"] = is_student
+        data["is_group_admin"] = is_group_admin
         data["profile"] = profile
 
-        # DEBUG uchun: superuserligini tekshirish
-        print(f"User: {tg_user.id}, username: {username}, is_superuser: {is_superuser}, role: {db_user.role}")
+        logger.info(
+            f"SUPERADMIN CHECK: user_id={tg_user.id}, is_superadmin={is_superadmin}, role={db_user.role}"
+        )
 
         return await handler(event, data)

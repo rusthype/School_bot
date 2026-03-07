@@ -2,97 +2,147 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+from aiogram.enums import ParseMode
+from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from school_bot.bot.config import Settings
-from school_bot.bot.handlers import admin, common, teacher
+from school_bot.bot.handlers import (
+    admin,
+    common,
+    teacher,
+    group_join,
+    librarian,
+    book_categories,
+    book_management,
+    admin_management,
+    book_order_cart,
+    support,
+    superadmin_orders,
+    error_handler,
+    superadmin_dashboard,
+    logs,
+    superadmin_settings,
+)
 from school_bot.bot.middlewares.db_session import DbSessionMiddleware
 from school_bot.bot.middlewares.user_context import UserContextMiddleware
+from school_bot.bot.middlewares.group_admin_guard import GroupAdminGuardMiddleware
+from school_bot.bot.middlewares.menu_guard import MenuGuardMiddleware
 from school_bot.database.session import create_session_factory, init_models
-from school_bot.bot.services.user_service import seed_superusers
+from school_bot.bot.services.user_service import seed_superadmins
 from school_bot.bot.services.group_service import seed_groups
+from school_bot.bot.services.school_service import seed_schools
+from school_bot.bot.services.book_service import seed_book_categories
+from school_bot.bot.services.order_escalation_service import start_overdue_order_watch
+from school_bot.bot.services.log_cleanup_service import LogCleanupService
 
 
-async def set_bot_commands(bot: Bot):
-    settings = Settings()
-
-    # Barcha foydalanuvchilar uchun umumiy komandalar
+async def set_bot_commands(bot: Bot) -> None:
     default_commands = [
         BotCommand(command="start", description="Botni ishga tushirish"),
         BotCommand(command="help", description="Yordam"),
+        BotCommand(command="stop", description="Menyuni yopish"),
+        BotCommand(command="pending_approvals", description="Tasdiqlanmagan o'qituvchilar"),
+        BotCommand(command="kutayotganlar", description="Tasdiqlanmagan o'qituvchilar"),
+        BotCommand(command="order_books", description="Kitob buyurtma qilish"),
+        BotCommand(command="my_orders", description="Mening buyurtmalarim"),
+        BotCommand(command="poll_voters", description="Topshiriq ovozlarini ko'rish"),
+        BotCommand(command="orders", description="Buyurtmalar ro'yxati"),
+        BotCommand(command="order_stats", description="Buyurtmalar statistikasi"),
+        BotCommand(command="pending_orders", description="Kutilayotgan buyurtmalar"),
+        BotCommand(command="add_category", description="Kategoriya qo'shish"),
+        BotCommand(command="list_categories", description="Kategoriyalar ro'yxati"),
+        BotCommand(command="edit_category", description="Kategoriya tahrirlash"),
+        BotCommand(command="remove_category", description="Kategoriya o'chirish"),
+        BotCommand(command="add_book", description="Kitob qo'shish"),
+        BotCommand(command="list_books", description="Kitoblar ro'yxati"),
+        BotCommand(command="edit_book", description="Kitob tahrirlash"),
+        BotCommand(command="remove_book", description="Kitob o'chirish"),
+        BotCommand(command="add_admin", description="Admin qo'shish"),
+        BotCommand(command="remove_admin", description="Admin o'chirish"),
+        BotCommand(command="list_admins", description="Adminlar ro'yxati"),
+        BotCommand(command="edit_admin_role", description="Admin roli"),
+        BotCommand(command="all_polls", description="Barcha ovozlar (superadmin)"),
+        BotCommand(command="add_teacher_manual", description="O'qituvchi qo'shish (manual)"),
+        BotCommand(command="support", description="Admin bilan bog'lanish"),
+        BotCommand(command="reply", description="Murojaatga javob berish (admin)"),
+        BotCommand(command="admin_orders", description="Buyurtmalar (superadmin)"),
+        BotCommand(command="logs", description="Loglarni ko'rish (superadmin)"),
     ]
-
-    # Teacherlar uchun qo'shimcha komandalar
-    teacher_commands = [
-        BotCommand(command="new_task", description="Yangi topshiriq yaratish"),
-        BotCommand(command="order_book", description="Kitob buyurtma qilish"),
-    ]
-
-    # Superuserlar uchun qo'shimcha komandalar
-    superuser_commands = [
-        BotCommand(command="groups", description="Guruhlar ro'yxati"),
-        BotCommand(command="add_group", description="Guruh qo'shish"),
-        BotCommand(command="edit_group", description="Guruhni tahrirlash"),
-        BotCommand(command="remove_group", description="Guruhni o'chirish"),
-        BotCommand(command="remove_teacher", description="O'qituvchini olib tashlash"),
-        BotCommand(command="list_teachers", description="Barcha o'qituvchilar ro'yxati"),
-        BotCommand(command="stats", description="Bot statistikasi"),
-        BotCommand(command="users", description="Foydalanuvchilar ro'yxati"),
-    ]
-
-    # Default komandalarni o'rnatish (hamma ko'radi)
-    await bot.set_my_commands(commands=default_commands, scope=BotCommandScopeDefault())
-
-    # Superuserlar uchun maxsus komandalar
-    for user_id in settings.superuser_ids:
-        try:
-            await bot.set_my_commands(
-                commands=default_commands + superuser_commands + teacher_commands,
-                scope=BotCommandScopeChat(chat_id=user_id)
-            )
-            logging.info(f"Superuser komandalari o'rnatildi: {user_id}")
-        except Exception as e:
-            logging.error(f"Superuser komandalarini o'rnatishda xatolik {user_id}: {e}")
-
-    logging.info("Bot komandalari o'rnatildi")
+    try:
+        await bot.set_my_commands(commands=default_commands, scope=BotCommandScopeDefault())
+        logging.info("Commands set successfully")
+    except Exception as e:
+        logging.warning(f"Could not set commands: {e}")
 
 
 async def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    logging.basicConfig(level=logging.INFO)
 
     settings = Settings()
 
     engine, session_factory = create_session_factory(settings.database_url)
     await init_models(engine)
-    await seed_superusers(session_factory=session_factory, superuser_tg_ids=settings.superuser_ids)
+    await seed_superadmins(session_factory=session_factory, superadmin_tg_ids=settings.superadmin_ids)
+    await seed_schools(session_factory=session_factory)
     await seed_groups(session_factory=session_factory, groups_fallback=settings.groups)
+    await seed_book_categories(session_factory=session_factory)
 
-    # Bot yaratish
     bot = Bot(
         token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-    # Komandalarni o'rnatish
-    await set_bot_commands(bot)
+    asyncio.create_task(set_bot_commands(bot))
+    asyncio.create_task(start_overdue_order_watch(bot=bot, session_factory=session_factory))
+    asyncio.create_task(start_log_cleanup_watch(settings))
 
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher()
 
+    dp.update.middleware(GroupAdminGuardMiddleware())
     dp.update.middleware(DbSessionMiddleware(session_factory=session_factory))
-    dp.update.middleware(UserContextMiddleware(superuser_ids=settings.superuser_ids))
+    dp.update.middleware(
+        UserContextMiddleware(
+            superadmin_ids=settings.superadmin_ids,
+            teacher_ids=settings.teacher_ids,
+            admin_group_id=settings.admin_group_id,
+        )
+    )
+    dp.update.middleware(MenuGuardMiddleware())
 
-    # Routerlarni to'g'ri tartibda ulash (MUHIM!)
-    dp.include_router(admin.router)  # Admin router birinchi
-    dp.include_router(teacher.router)  # Teacher router ikkinchi
-    dp.include_router(common.router)  # Common router eng oxirgi
+    dp.include_router(admin.router)
+    dp.include_router(admin_management.router)
+    dp.include_router(teacher.router)
+    dp.include_router(librarian.router)
+    dp.include_router(book_categories.router)
+    dp.include_router(book_management.router)
+    dp.include_router(book_order_cart.router)
+    dp.include_router(superadmin_orders.router)
+    dp.include_router(superadmin_dashboard.router)
+    dp.include_router(superadmin_settings.router)
+    dp.include_router(logs.router)
+    dp.include_router(error_handler.router)
+    dp.include_router(support.router)
+    dp.include_router(group_join.router)
+    dp.include_router(common.router)
 
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    logging.info("Starting bot...")
+    await dp.start_polling(bot)
+
+
+async def start_log_cleanup_watch(settings: Settings) -> None:
+    cleanup_service = LogCleanupService(
+        log_dir="logs",
+        max_size_mb=settings.log_max_size_mb,
+    )
+
+    while True:
+        try:
+            await cleanup_service.check_and_cleanup()
+            await cleanup_service.cleanup_old_files(days=settings.log_cleanup_days)
+        except Exception as exc:
+            logging.error("Log cleanup failed: %s", exc)
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":

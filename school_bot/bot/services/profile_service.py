@@ -24,6 +24,8 @@ async def upsert_profile(
     first_name: str,
     last_name: str | None,
     phone: str,
+    school_id: int | None = None,
+    profile_type: str = "teacher",
 ) -> Profile:
     profile = await get_profile_by_user_id(session, user_id)
 
@@ -34,6 +36,8 @@ async def upsert_profile(
         profile.first_name = first_name
         profile.last_name = last_name
         profile.phone = phone
+        profile.school_id = school_id
+        profile.profile_type = profile_type
         profile.registered_at = datetime.utcnow()
         profile.is_approved = False
         profile.approved_by = None
@@ -49,9 +53,58 @@ async def upsert_profile(
         first_name=first_name,
         last_name=last_name,
         phone=phone,
+        school_id=school_id,
+        profile_type=profile_type,
         registered_at=datetime.utcnow(),
         is_approved=False,
         assigned_groups=[],
+    )
+    session.add(profile)
+    await session.commit()
+    await session.refresh(profile)
+    return profile
+
+
+async def upsert_student_profile(
+    session: AsyncSession,
+    user_id: int,
+    first_name: str,
+    last_name: str | None,
+    phone: str,
+    class_name: str,
+    school_id: int | None = None,
+) -> Profile:
+    profile = await get_profile_by_user_id(session, user_id)
+
+    if profile:
+        profile.first_name = first_name
+        profile.last_name = last_name
+        profile.phone = phone
+        profile.school_id = school_id
+        profile.profile_type = "student"
+        profile.assigned_groups = [class_name]
+        profile.registered_at = datetime.utcnow()
+        profile.is_approved = True
+        profile.approved_by = None
+        profile.approved_at = datetime.utcnow()
+        profile.rejected_at = None
+        profile.removed_at = None
+        await session.commit()
+        await session.refresh(profile)
+        return profile
+
+    profile = Profile(
+        user_id=user_id,
+        first_name=first_name,
+        last_name=last_name,
+        phone=phone,
+        school_id=school_id,
+        profile_type="student",
+        assigned_groups=[class_name],
+        registered_at=datetime.utcnow(),
+        is_approved=True,
+        approved_by=None,
+        approved_at=datetime.utcnow(),
     )
     session.add(profile)
     await session.commit()
@@ -64,16 +117,20 @@ async def approve_profile(
     profile: Profile,
     approved_by_user_id: int,
     assigned_groups: list[str],
+    school_id: int | None = None,
 ) -> Profile:
     profile.is_approved = True
     profile.assigned_groups = assigned_groups
+    profile.profile_type = profile.profile_type or "teacher"
     profile.approved_by = approved_by_user_id
     profile.approved_at = datetime.utcnow()
     profile.rejected_at = None
     profile.removed_at = None
+    if school_id is not None:
+        profile.school_id = school_id
 
     user = await session.get(User, profile.user_id)
-    if user and user.role != UserRole.superuser:
+    if user and user.role not in (UserRole.superadmin, UserRole.librarian):
         user.role = UserRole.teacher
 
     await session.commit()

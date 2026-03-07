@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, Text, func, Index, String
 from sqlalchemy import JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -12,22 +13,29 @@ from school_bot.database.base import Base
 
 
 class UserRole(str, enum.Enum):
-    superuser = "superuser"
+    superadmin = "superadmin"
     teacher = "teacher"
+    librarian = "librarian"
 
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (Index("ix_users_role_created", "role", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
-    username: Mapped[str | None] = mapped_column(Text, nullable=True)  # YANGI: username uchun
+    username: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)  # YANGI: username uchun
     full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     role: Mapped[UserRole | None] = mapped_column(
         Enum(UserRole, name="user_role"),
         nullable=True,
+        index=True,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
 
     tasks: Mapped[list["Task"]] = relationship(back_populates="teacher", cascade="all,delete-orphan")
     profile: Mapped["Profile | None"] = relationship(
@@ -45,10 +53,170 @@ class Task(Base):
     teacher_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    poll_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    poll_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    poll_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
 
     teacher: Mapped[User] = relationship(back_populates="tasks")
+    poll_votes: Mapped[list["PollVote"]] = relationship(back_populates="task", cascade="all,delete-orphan")
+
+
+class PollVote(Base):
+    __tablename__ = "poll_votes"
+    __table_args__ = (
+        Index("ix_poll_votes_user_poll", "user_id", "poll_id"),
+        Index("ix_poll_votes_task_option", "task_id", "option_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    poll_message_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    poll_id: Mapped[str] = mapped_column(Text, index=True)
+    task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    option_id: Mapped[int] = mapped_column(Integer, index=True)
+    option_text: Mapped[str] = mapped_column(Text)
+    voted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+
+    user: Mapped[User] = relationship()
+    task: Mapped[Task | None] = relationship(back_populates="poll_votes")
+
+
+class BookCategory(Base):
+    __tablename__ = "book_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    books: Mapped[list["Book"]] = relationship(back_populates="category", cascade="all,delete-orphan")
+
+
+class Book(Base):
+    __tablename__ = "books"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("book_categories.id", ondelete="CASCADE"),
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cover_image: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    category: Mapped[BookCategory] = relationship(back_populates="books")
+    order_items: Mapped[list["BookOrderItem"]] = relationship(back_populates="book", cascade="all,delete-orphan")
+
+
+class BookOrder(Base):
+    __tablename__ = "book_orders"
+    __table_args__ = (Index("ix_orders_status_created", "status", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    librarian_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    status: Mapped[str] = mapped_column(Text, default="pending", index=True)
+    priority: Mapped[str] = mapped_column(Text, default="normal", index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    delivery_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    delivery_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    escalated: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    delivered_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    teacher: Mapped[User] = relationship(foreign_keys=[teacher_id])
+    librarian: Mapped[User | None] = relationship(foreign_keys=[librarian_id])
+    deliverer: Mapped[User | None] = relationship(foreign_keys=[delivered_by])
+    admin: Mapped[User | None] = relationship(foreign_keys=[updated_by])
+    items: Mapped[list["BookOrderItem"]] = relationship(back_populates="order", cascade="all,delete-orphan")
+    status_history: Mapped[list["OrderStatusHistory"]] = relationship(
+        back_populates="order",
+        cascade="all,delete-orphan",
+        order_by="OrderStatusHistory.changed_at",
+    )
+
+
+class BookOrderItem(Base):
+    __tablename__ = "book_order_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("book_orders.id", ondelete="CASCADE"))
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+
+    order: Mapped[BookOrder] = relationship(back_populates="items")
+    book: Mapped[Book] = relationship(back_populates="order_items")
+
+
+class OrderStatusHistory(Base):
+    __tablename__ = "order_status_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("book_orders.id", ondelete="CASCADE"), index=True)
+    old_status: Mapped[str] = mapped_column(String(50))
+    new_status: Mapped[str] = mapped_column(String(50), index=True)
+    changed_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    order: Mapped[BookOrder] = relationship(back_populates="status_history")
+    user: Mapped[User] = relationship(foreign_keys=[changed_by])
+
+
+class SupportTicket(Base):
+    __tablename__ = "support_tickets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_number: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, default="open", index=True)
+    admin_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
+    replied_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
+    admin: Mapped[User | None] = relationship(foreign_keys=[replied_by])
 
 
 class Profile(Base):
@@ -59,19 +227,35 @@ class Profile(Base):
     first_name: Mapped[str] = mapped_column(Text, nullable=False)
     last_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     phone: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_type: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     assigned_groups: Mapped[list[str]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"),
         default=list,
     )
-    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    is_approved: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    registered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    school_id: Mapped[int | None] = mapped_column(ForeignKey("schools.id"), nullable=True, index=True)
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[User] = relationship(back_populates="profile", foreign_keys=[user_id])
     approved_by_user: Mapped[User | None] = relationship(foreign_keys=[approved_by])
+    school: Mapped[Optional["School"]] = relationship()
+
+
+class School(Base):
+    __tablename__ = "schools"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    number: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Group(Base):
@@ -80,4 +264,38 @@ class Group(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    invite_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    school_id: Mapped[int | None] = mapped_column(
+        ForeignKey("schools.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    school: Mapped[Optional["School"]] = relationship()
+
+
+class BotSettings(Base):
+    __tablename__ = "bot_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    bot_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bot_version: Mapped[str] = mapped_column(String(50), default="v2.1.0")
+    language: Mapped[str] = mapped_column(String(10), default="uz", index=True)
+
+    work_start_mon_fri: Mapped[str] = mapped_column(String(5), default="08:00")
+    work_end_mon_fri: Mapped[str] = mapped_column(String(5), default="18:00")
+    work_start_sat: Mapped[str] = mapped_column(String(5), default="09:00")
+    work_end_sat: Mapped[str] = mapped_column(String(5), default="14:00")
+    work_sun: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    notify_homework: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_announcements: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_stats: Mapped[bool] = mapped_column(Boolean, default=False)
+    notify_marketing: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

@@ -41,8 +41,21 @@ async def get_groups_by_names(session: AsyncSession, names: Iterable[str]) -> li
     return list(result.scalars().all())
 
 
-async def add_group(session: AsyncSession, name: str, chat_id: int) -> Group:
-    group = Group(name=name, chat_id=chat_id)
+async def list_groups_by_school(session: AsyncSession, school_id: int) -> list[Group]:
+    result = await session.execute(
+        select(Group).where(Group.school_id == school_id).order_by(Group.name)
+    )
+    return list(result.scalars().all())
+
+
+async def add_group(
+    session: AsyncSession,
+    name: str,
+    chat_id: int,
+    invite_link: str | None = None,
+    school_id: int | None = None,
+) -> Group:
+    group = Group(name=name, chat_id=chat_id, invite_link=invite_link, school_id=school_id)
     session.add(group)
     await session.commit()
     await session.refresh(group)
@@ -54,19 +67,36 @@ async def update_group(
     group: Group,
     name: str | None = None,
     chat_id: int | None = None,
+    invite_link: str | None = None,
+    school_id: int | None = None,
 ) -> Group:
     if name is not None:
         group.name = name
     if chat_id is not None:
         group.chat_id = chat_id
+    if invite_link is not None:
+        group.invite_link = invite_link
+    if school_id is not None:
+        group.school_id = school_id
     await session.commit()
     await session.refresh(group)
     return group
 
 
+async def set_invite_link(session: AsyncSession, group: Group, invite_link: str | None) -> Group:
+    return await update_group(session, group, invite_link=invite_link)
+
+
 async def remove_group(session: AsyncSession, group: Group) -> None:
     await session.delete(group)
     await session.commit()
+
+
+async def update_group_chat_id(session: AsyncSession, group: Group, new_chat_id: int) -> Group:
+    group.chat_id = new_chat_id
+    await session.commit()
+    await session.refresh(group)
+    return group
 
 
 async def seed_groups(session_factory, groups_fallback: dict[str, int]) -> None:

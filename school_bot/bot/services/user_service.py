@@ -103,20 +103,20 @@ async def remove_teacher_role(session: AsyncSession, telegram_id: int) -> tuple[
     return True, user
 
 
-async def seed_superusers(session_factory: Callable[[], AsyncSession], superuser_tg_ids: list[int]) -> None:
-    if not superuser_tg_ids:
+async def seed_superadmins(session_factory: Callable[[], AsyncSession], superadmin_tg_ids: list[int]) -> None:
+    if not superadmin_tg_ids:
         return
 
     async with session_factory() as session:
         # upsert-ish: update existing + create missing
-        res = await session.execute(select(User).where(User.telegram_id.in_(superuser_tg_ids)))
+        res = await session.execute(select(User).where(User.telegram_id.in_(superadmin_tg_ids)))
         existing = {u.telegram_id: u for u in res.scalars().all()}
 
-        for tg_id in superuser_tg_ids:
+        for tg_id in superadmin_tg_ids:
             user = existing.get(tg_id)
             if user is None:
-                session.add(User(telegram_id=tg_id, full_name=None, role=UserRole.superuser))
+                session.add(User(telegram_id=tg_id, full_name=None, role=UserRole.superadmin))
             else:
-                user.role = UserRole.superuser
+                user.role = UserRole.superadmin
 
         await session.commit()

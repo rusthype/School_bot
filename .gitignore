@@ -4,13 +4,12 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
+.env
+.venv
 venv/
-.venv/
 ENV/
-env.bak/
-venv.bak/
-pythonenv.*
+env/
+virtualenv/
 *.egg
 *.egg-info/
 dist/
@@ -24,7 +23,6 @@ parts/
 sdist/
 var/
 wheels/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -34,32 +32,14 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 pip-wheel-metadata/
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-*.mo
-*.pot
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-instance/
-.webassets-cache
 
 # Virtual Environment
 .env
 .venv
 venv/
 ENV/
+env/
+virtualenv/
 
 # IDE
 .vscode/
@@ -67,10 +47,10 @@ ENV/
 *.swp
 *.swo
 *~
-.DS_Store
 .project
 .pydevproject
 .settings/
+*.code-workspace
 
 # Database
 *.db
@@ -85,22 +65,32 @@ ENV/
 *.tgz
 *.tar.gz
 *.bak
+*.backup
 
-# Project specific
+# Project specific - MEDIA FILES (CRITICAL)
 photos/
+covers/
+uploads/
+media/
+downloads/
 *.jpg
 *.jpeg
 *.png
 *.gif
 *.mp4
 *.mov
+*.pdf
+*.doc
+*.docx
 
 # Logs
 logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+*.log.*
+error.log
+access.log
+school_bot.log
+*.log.gz
 
 # Environment variables
 .env
@@ -108,6 +98,8 @@ yarn-error.log*
 .env.*.local
 .env.production
 .env.development
+.env.example  # Keep this, but .env files should be ignored
+!.env.example
 
 # Secret files
 *.pem
@@ -127,24 +119,15 @@ Thumbs.db
 *.bak
 ~$*
 
-# Docker
-*.pid
-docker-compose.override.yml
-.docker/
-docker-data/
-
 # Testing
-.cache
 .pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.hypothesis/
-.tox/
 .coverage
 .coverage.*
 *.cover
-*.py,cover
 htmlcov/
+.tox/
+.cache
+nosetests.xml
 coverage.xml
 *.report
 *.report.json
@@ -159,40 +142,22 @@ temp/
 *~
 .DS_Store
 
-# Uploads
-uploads/
-media/
-staticfiles/
-static/
+# Docker
+.docker/
+docker-compose.override.yml
+*.pid
+Dockerfile
+docker-compose.yml  # Keep if needed, but usually committed
 
 # Celery
 celerybeat-schedule
 celerybeat.pid
 *.pid
 
-# Django
-*.log
-*.pot
+# Alembic (migrations)
+alembic/versions/__pycache__/
 *.pyc
-__pycache__/
-local_settings.py
-db.sqlite3
-media/
-static/
-
-# Flask
-instance/
-.webassets-cache
-.env
-.flaskenv
-
-# FastAPI
-__pycache__/
-*.pyc
-.env
-.venv
-dist/
-build/
+!alembic/versions/*.py  # Keep migration files
 
 # Bot specific
 bot.session

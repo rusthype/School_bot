@@ -5,4 +5,5 @@ class NewTaskStates(StatesGroup):
     group_selection = State()  # Guruh tanlash
     topic = State()            # Mavzu
     description = State()      # Vazifa
+    notes = State()            # Ixtiyoriy izoh
     photo = State()            # Rasm
