@@ -29,6 +29,7 @@ from school_bot.bot.services.book_service import (
     remove_book,
 )
 from school_bot.bot.services.logger_service import get_logger
+from school_bot.bot.utils.telegram import send_chunked_message, safe_edit_or_send
 
 router = Router(name=__name__)
 logger = get_logger(__name__)
@@ -213,9 +214,9 @@ async def _show_edit_categories(message: Message, categories: list, edit: bool =
     builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="editbook_cancel"))
     text = "📚 Qaysi kategoriyadagi kitobni tahrirlamoqchisiz?"
     if edit:
-        await message.edit_text(text, reply_markup=builder.as_markup())
+        await safe_edit_or_send(message, text, reply_markup=builder.as_markup())
     else:
-        await message.answer(text, reply_markup=builder.as_markup())
+        await send_chunked_message(message, text, reply_markup=builder.as_markup())
 
 
 async def _show_edit_books(
@@ -255,9 +256,9 @@ async def _show_edit_books(
 
     text = "\n".join(lines).strip()
     if edit:
-        await message.edit_text(text, reply_markup=builder.as_markup())
+        await safe_edit_or_send(message, text, reply_markup=builder.as_markup())
     else:
-        await message.answer(text, reply_markup=builder.as_markup())
+        await send_chunked_message(message, text, reply_markup=builder.as_markup())
 
 
 async def _show_edit_fields(message: Message, book_title: str) -> None:
@@ -288,9 +289,9 @@ async def _show_delete_categories(message: Message, categories: list, edit: bool
     builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="deletebook_cancel"))
     text = "📚 Qaysi kategoriyadagi kitobni o'chirmoqchisiz?"
     if edit:
-        await message.edit_text(text, reply_markup=builder.as_markup())
+        await safe_edit_or_send(message, text, reply_markup=builder.as_markup())
     else:
-        await message.answer(text, reply_markup=builder.as_markup())
+        await send_chunked_message(message, text, reply_markup=builder.as_markup())
 
 
 async def _show_delete_books(
@@ -326,9 +327,9 @@ async def _show_delete_books(
 
     text = "\n".join(lines).strip()
     if edit:
-        await message.edit_text(text, reply_markup=builder.as_markup())
+        await safe_edit_or_send(message, text, reply_markup=builder.as_markup())
     else:
-        await message.answer(text, reply_markup=builder.as_markup())
+        await send_chunked_message(message, text, reply_markup=builder.as_markup())
 
 
 @router.message(Command("add_book"))
@@ -522,7 +523,7 @@ async def _render_category_books(
     if as_edit:
         await message.edit_text("\n".join(lines).strip(), reply_markup=builder.as_markup())
     else:
-        await message.answer("\n".join(lines).strip(), reply_markup=builder.as_markup())
+        await send_chunked_message(message, "\n".join(lines).strip(), reply_markup=builder.as_markup())
 
     await _send_book_cover_previews(message, books, limit=5)
 
@@ -771,15 +772,16 @@ async def show_add_book_confirm(message: Message, state: FSMContext) -> None:
         "📋 Kitob ma'lumotlari:",
         f"📚 Kategoriya: {category_name}",
         f"📖 Nomi: {title}",
-        f"🖼️ Rasm: {'✅ Ha' if cover_image else '❌ Yo\'q'}",
     ]
+    cover_text = "✅ Ha" if cover_image else "❌ Yo'q"
+    lines.append(f"🖼️ Rasm: {cover_text}")
 
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Tasdiqlash", callback_data="book_add_confirm")
     builder.button(text="❌ Bekor qilish", callback_data="book_add_cancel")
     builder.adjust(2)
 
-    await message.answer("\n".join(lines), reply_markup=builder.as_markup())
+    await send_chunked_message(message, "\n".join(lines), reply_markup=builder.as_markup())
 
 
 @router.callback_query(lambda c: c.data == "book_add_confirm")

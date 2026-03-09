@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import re
 
-from aiogram import Router
-from aiogram.filters import Command
+from aiogram import Router, F
+from aiogram.filters import Command, StateFilter
 from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from school_bot.bot.handlers.common import get_main_keyboard
+from school_bot.bot.handlers.common import get_main_keyboard, cancel_current_action
 from school_bot.bot.services.book_service import (
     list_categories,
     add_category,
@@ -19,10 +20,67 @@ from school_bot.bot.services.book_service import (
     ALLOWED_CATEGORY_NAMES,
 )
 from school_bot.bot.services.logger_service import get_logger
+from school_bot.bot.states.book_states import CategoryAddStates
+from school_bot.bot.utils.telegram import send_chunked_message
 
 router = Router(name=__name__)
 logger = get_logger(__name__)
 _ADD_CATEGORY_RE = re.compile(r"^/add_category(?:@\\w+)?(?:\\s+(.+))?$", re.IGNORECASE)
+
+
+@router.message(Command("cancel"), StateFilter(CategoryAddStates.waiting_for_name))
+async def cancel_add_category(
+    message: Message,
+    state: FSMContext,
+    is_superadmin: bool = False,
+    is_teacher: bool = False,
+    is_librarian: bool = False,
+) -> None:
+    await cancel_current_action(
+        message,
+        state,
+        is_superadmin=is_superadmin,
+        is_teacher=is_teacher,
+        is_librarian=is_librarian,
+    )
+
+
+@router.message(CategoryAddStates.waiting_for_name, F.text)
+async def add_category_from_text(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
+        return
+
+    raw_args = (message.text or "").strip()
+    if not raw_args:
+        await message.answer("❌ Kategoriya nomini yozing.")
+        return
+    if raw_args.startswith("/"):
+        return
+
+    name = raw_args.strip()
+    if len(name) >= 2 and name[0] == name[-1] and name[0] in ("'", '"'):
+        name = name[1:-1].strip()
+    if name not in ALLOWED_CATEGORY_NAMES:
+        await message.answer("❌ Faqat 1-sinf, 2-sinf, 3-sinf, 4-sinf kategoriyalariga ruxsat berilgan.")
+        return
+    existing = await get_category_by_name(session, name)
+    if existing:
+        await message.answer(f"❌ '{name}' kategoriyasi allaqachon mavjud.")
+        return
+
+    try:
+        category = await add_category(session, name=name)
+        await state.clear()
+        await message.answer(f"✅ Kategoriya qo'shildi: {category.name}")
+    except Exception:
+        logger.error("Error adding category", exc_info=True)
+        await message.answer("Qaytadan urinib ko'ring.")
 
 
 @router.message(Command("add_category"))

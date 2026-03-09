@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 import asyncio
 
 import asyncpg
+
+# Ensure project root is on sys.path (needed in Docker)
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from school_bot.bot.config import Settings
 

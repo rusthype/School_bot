@@ -28,6 +28,7 @@ from school_bot.bot.services.book_catalog_service import get_book_by_id
 from school_bot.bot.handlers.common import get_main_keyboard
 from school_bot.database.models import BookOrder, BookOrderItem, User, UserRole
 from school_bot.bot.services.logger_service import get_logger
+from school_bot.bot.utils.telegram import send_chunked_message
 
 router = Router(name=__name__)
 logger = get_logger(__name__)
@@ -117,7 +118,7 @@ async def cmd_orders(
         lines.append("")
 
     keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=False, is_librarian=is_librarian)
-    await message.answer("\n".join(lines).strip(), reply_markup=keyboard)
+    await send_chunked_message(message, "\n".join(lines).strip(), reply_markup=keyboard)
 
 
 @router.message(Command("librarian_orders"))
@@ -141,7 +142,7 @@ async def cmd_librarian_orders_menu(
         f"❌ Rad etilgan: {stats['rejected']} ta",
     ]
     keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=False, is_librarian=is_librarian)
-    await message.answer("\n".join(lines), reply_markup=keyboard)
+    await send_chunked_message(message, "\n".join(lines), reply_markup=keyboard)
 
 
 @router.message(Command("pending_orders"))
@@ -582,7 +583,7 @@ async def cmd_order_stats(
     ]
 
     keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=False, is_librarian=is_librarian)
-    await message.answer("\n".join(lines), reply_markup=keyboard)
+    await send_chunked_message(message, "\n".join(lines), reply_markup=keyboard)
 
 
 @router.message(Command("mark_done"))

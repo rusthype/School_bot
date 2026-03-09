@@ -29,6 +29,7 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 six==1.17.0
 SQLAlchemy==2.0.48
+alembic==1.13.2
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 yarl==1.23.0

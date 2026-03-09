@@ -1,33 +1,23 @@
 from __future__ import annotations
-
 from datetime import datetime
-
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
 from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.services.order_status import ORDER_STATUS, get_status_text, get_priority_text
-from school_bot.database.models import BookOrder, OrderStatusHistory, User, BookOrderItem
-
+from school_bot.database.models import BookOrder, OrderStatusHistory, User, BookOrderItem, School, Profile
 router = Router(name=__name__)
 logger = get_logger(__name__)
-
-
 class OrderStatusChange(StatesGroup):
     waiting_for_comment = State()
-
-
 def _is_superadmin(is_superadmin: bool) -> bool:
     return is_superadmin
-
-
 async def _build_items_text(order: BookOrder) -> str:
     lines = []
     for item in order.items:
@@ -37,8 +27,6 @@ async def _build_items_text(order: BookOrder) -> str:
             title = f"ID: {item.book_id}"
         lines.append(f"  • {title} - {item.quantity} dona")
     return "\n".join(lines)
-
-
 @router.message(Command("admin_orders"))
 async def admin_orders_command(
     message: Message,
@@ -48,10 +36,7 @@ async def admin_orders_command(
     if not _is_superadmin(is_superadmin):
         await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
         return
-
     await _show_orders_list(message, session)
-
-
 @router.callback_query(lambda c: c.data == "admin_orders")
 async def admin_orders_callback(
     callback: CallbackQuery,
@@ -63,8 +48,6 @@ async def admin_orders_callback(
         return
     await _show_orders_list(callback.message, session, edit=True)
     await callback.answer()
-
-
 async def _show_orders_list(target: Message, session: AsyncSession, edit: bool = False) -> None:
     result = await session.execute(
         select(BookOrder)
@@ -73,7 +56,6 @@ async def _show_orders_list(target: Message, session: AsyncSession, edit: bool =
         .options(selectinload(BookOrder.teacher))
     )
     orders = result.scalars().all()
-
     if not orders:
         text = "📭 Hali hech qanday buyurtma yo'q."
         keyboard = InlineKeyboardBuilder()
@@ -83,10 +65,8 @@ async def _show_orders_list(target: Message, session: AsyncSession, edit: bool =
         else:
             await target.answer(text, reply_markup=keyboard.as_markup(), parse_mode="HTML")
         return
-
     lines = ["📋 <b>Barcha buyurtmalar</b>", ""]
     keyboard = InlineKeyboardBuilder()
-
     for order in orders:
         teacher = order.teacher
         teacher_name = teacher.full_name or (teacher.username and f"@{teacher.username}") or str(teacher.telegram_id) if teacher else f"ID: {order.teacher_id}"
@@ -100,17 +80,13 @@ async def _show_orders_list(target: Message, session: AsyncSession, edit: bool =
             "──────────────────"
         )
         keyboard.button(text=f"#{order.id}", callback_data=f"admin_order_view:{order.id}")
-
     keyboard.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel"))
     keyboard.adjust(2)
-
     text = "\n".join(lines)
     if edit:
         await target.edit_text(text, reply_markup=keyboard.as_markup(), parse_mode="HTML")
     else:
         await target.answer(text, reply_markup=keyboard.as_markup(), parse_mode="HTML")
-
-
 @router.callback_query(lambda c: c.data.startswith("admin_order_view:"))
 async def admin_view_order(
     callback: CallbackQuery,
@@ -125,7 +101,6 @@ async def admin_view_order(
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
-
     result = await session.execute(
         select(BookOrder)
         .where(BookOrder.id == order_id)
@@ -139,13 +114,11 @@ async def admin_view_order(
     if not order:
         await callback.answer("❌ Buyurtma topilmadi.", show_alert=True)
         return
-
     teacher = order.teacher
     teacher_name = teacher.full_name or (teacher.username and f"@{teacher.username}") or str(teacher.telegram_id) if teacher else f"ID: {order.teacher_id}"
     items_text = await _build_items_text(order)
     status_text = get_status_text(order.status)
     priority_text = get_priority_text(order.priority)
-
     history = order.status_history or []
     last_update = history[-1] if history else None
     last_line = ""
@@ -153,7 +126,6 @@ async def admin_view_order(
         last_line = f"🔄 Oxirgi o'zgarish: {last_update.changed_at.strftime('%d.%m.%Y %H:%M')}"
         if last_update.comment:
             last_line += f"\n💬 Izoh: {last_update.comment}"
-
     created_at_str = order.created_at.strftime('%d.%m.%Y %H:%M') if order.created_at else "Noma'lum"
     text = (
         f"📋 <b>Buyurtma #{order.id}</b>\n\n"
@@ -164,7 +136,6 @@ async def admin_view_order(
         f"📅 Yaratilgan: {created_at_str}\n"
         f"{last_line}"
     )
-
     keyboard = InlineKeyboardBuilder()
     current_info = ORDER_STATUS.get(order.status, ORDER_STATUS["pending"])
     for next_status in current_info.get("next_status", []):
@@ -180,7 +151,6 @@ async def admin_view_order(
         InlineKeyboardButton(text="📜 Tarix", callback_data=f"admin_order_history:{order.id}"),
         InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_orders"),
     )
-
     await callback.message.edit_text(text, reply_markup=keyboard.as_markup(), parse_mode="HTML")
     await callback.answer()
 
@@ -201,12 +171,10 @@ async def admin_change_status(
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
-
     order = await session.get(BookOrder, order_id)
     if not order:
         await callback.answer("❌ Buyurtma topilmadi.", show_alert=True)
         return
-
     await state.update_data(order_id=order_id, old_status=order.status, new_status=new_status)
     await state.set_state(OrderStatusChange.waiting_for_comment)
     await callback.message.edit_text(
@@ -220,8 +188,6 @@ async def admin_change_status(
         parse_mode="HTML",
     )
     await callback.answer()
-
-
 @router.message(OrderStatusChange.waiting_for_comment)
 async def admin_status_comment(
     message: Message,
@@ -234,7 +200,6 @@ async def admin_status_comment(
         await message.answer("⛔ Ruxsat yo'q.")
         await state.clear()
         return
-
     data = await state.get_data()
     order_id = data.get("order_id")
     old_status = data.get("old_status")
@@ -243,17 +208,14 @@ async def admin_status_comment(
         await message.answer("❌ So'rov muddati tugadi.")
         await state.clear()
         return
-
     comment = (message.text or "").strip()
     if comment == "/skip":
         comment = None
-
     order = await session.get(BookOrder, int(order_id))
     if not order:
         await message.answer("❌ Buyurtma topilmadi.")
         await state.clear()
         return
-
     order.status = new_status
     order.updated_at = datetime.utcnow()
     order.updated_by = db_user.id
@@ -267,7 +229,6 @@ async def admin_status_comment(
         )
     )
     await session.commit()
-
     teacher = await session.get(User, order.teacher_id)
     if teacher:
         await _notify_teacher_status_change(
@@ -278,13 +239,10 @@ async def admin_status_comment(
             new_status,
             comment,
         )
-
     await message.answer(
         f"✅ Status o'zgartirildi: {get_status_text(old_status)} ➡️ {get_status_text(new_status)}"
     )
     await state.clear()
-
-
 async def _notify_teacher_status_change(
     bot,
     teacher_chat_id: int,
@@ -302,8 +260,6 @@ async def _notify_teacher_status_change(
     if comment:
         text += f"\n💬 Izoh: {comment}"
     await bot.send_message(chat_id=teacher_chat_id, text=text, parse_mode="HTML")
-
-
 @router.callback_query(lambda c: c.data.startswith("admin_order_history:"))
 async def admin_order_history(
     callback: CallbackQuery,
@@ -318,7 +274,6 @@ async def admin_order_history(
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
-
     result = await session.execute(
         select(OrderStatusHistory)
         .where(OrderStatusHistory.order_id == order_id)
@@ -335,7 +290,6 @@ async def admin_order_history(
         )
         await callback.answer()
         return
-
     lines = [f"📜 <b>Buyurtma #{order_id} tarixi</b>", ""]
     for record in history:
         user = record.user
@@ -346,8 +300,16 @@ async def admin_order_history(
         if record.comment:
             lines.append(f"💬 Izoh: {record.comment}")
         lines.append("──────────────────")
-
     keyboard = InlineKeyboardBuilder()
     keyboard.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"admin_order_view:{order_id}"))
     await callback.message.edit_text("\n".join(lines), reply_markup=keyboard.as_markup(), parse_mode="HTML")
+    await callback.answer()
+def _paginate(items: list, page: int, page_size: int) -> tuple[list, int, int]:
+    total = len(items)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    return items[start:start + page_size], page, total_pages
+@router.callback_query(lambda c: c.data == "noop")
+async def noop_callback(callback: CallbackQuery) -> None:
     await callback.answer()

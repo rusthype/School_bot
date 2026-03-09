@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from school_bot.bot.handlers.common import get_main_keyboard
+from school_bot.bot.utils.telegram import send_chunked_to_chat
 from school_bot.bot.services.book_catalog_service import (
     list_categories,
     list_books_by_category,
@@ -187,6 +188,9 @@ async def _show_book_detail(
     if nav_buttons:
         builder.row(*nav_buttons)
 
+    builder.row(
+        InlineKeyboardButton(text="✅ Buyurtma berish", callback_data="cart_checkout")
+    )
     builder.row(
         InlineKeyboardButton(text="🛒 Savatni ko'rish", callback_data="cart_view"),
         InlineKeyboardButton(text="⬅️ Kategoriyalar", callback_data="cart_back_category"),
@@ -824,9 +828,10 @@ async def _finalize_order(
     for chat_id in recipient_ids:
         try:
             if chat_id in action_recipient_ids:
-                await callback.bot.send_message(
-                    chat_id=chat_id,
-                    text=order_message,
+                await send_chunked_to_chat(
+                    callback.bot,
+                    chat_id,
+                    order_message,
                     reply_markup=action_keyboard.as_markup(),
                 )
             else:
@@ -836,13 +841,14 @@ async def _finalize_order(
                         text="📋 Ko'rish",
                         callback_data=f"admin_order_view:{order.id}",
                     )
-                    await callback.bot.send_message(
-                        chat_id=chat_id,
-                        text=order_message,
+                    await send_chunked_to_chat(
+                        callback.bot,
+                        chat_id,
+                        order_message,
                         reply_markup=admin_keyboard.as_markup(),
                     )
                 else:
-                    await callback.bot.send_message(chat_id=chat_id, text=order_message)
+                    await send_chunked_to_chat(callback.bot, chat_id, order_message)
             for cover_path, caption in cover_payloads:
                 await callback.bot.send_photo(
                     chat_id=chat_id,
@@ -905,6 +911,18 @@ async def cart_cancel(
     await _safe_edit_text(callback.message, "❌ Buyurtma bekor qilindi.")
     await callback.message.answer("Asosiy menyu", reply_markup=keyboard)
     await callback.answer()
+
+
+@router.message(StateFilter(BookOrderStates), F.text == "🏠 Bosh menyu")
+async def book_order_back_to_main(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    await state.clear()
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher or is_superadmin)
+    await message.answer("Asosiy menyu", reply_markup=keyboard)
 
 
 @router.message(StateFilter(BookOrderStates), F.text == "❌ /cancel")

@@ -30,8 +30,15 @@ class SuperAdminMenuBuilder:
             KeyboardButton(text="📚 Kitoblar"),
         )
         builder.row(
+            KeyboardButton(text="📦 Buyurtmalar"),
             KeyboardButton(text="📊 Statistika"),
+        )
+        builder.row(
             KeyboardButton(text="💾 Backup"),
+            KeyboardButton(text="📚 GURUHLAR"),
+        )
+        builder.row(
+            KeyboardButton(text="🏫 Maktablar"),
         )
         builder.row(
             KeyboardButton(text="📢 Xabarnoma"),
@@ -39,8 +46,8 @@ class SuperAdminMenuBuilder:
         )
         builder.row(
             KeyboardButton(text="📋 Loglar"),
-            KeyboardButton(text="❓ Yordam"),
         )
+        builder.row(KeyboardButton(text="❓ Yordam"))
         builder.row(KeyboardButton(text="🏠 Bosh menyu"))
         return builder.as_markup(resize_keyboard=True, input_field_placeholder="👇 Menyudan tanlang...")
 

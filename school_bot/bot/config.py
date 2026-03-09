@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Dict
+from typing import List
 import json
 
 from pydantic import Field
@@ -12,9 +12,6 @@ class Settings(BaseSettings):
 
     bot_token: str = Field(alias="BOT_TOKEN")
     database_url: str = Field(alias="DATABASE_URL")
-
-    # Guruhlar JSON formatida: {"1-sinf": -10012345, "2-sinf": -10067890}
-    groups_raw: str = Field(default="{}", alias="GROUPS")
 
     superadmin_ids_raw: str = Field(default="", alias="SUPERADMIN_IDS")
     teacher_ids_raw: str = Field(default="", alias="TEACHER_IDS")
@@ -39,10 +36,4 @@ class Settings(BaseSettings):
         parts = [p.strip() for p in raw.split(",")]
         return [int(p) for p in parts if p]
 
-    @property
-    def groups(self) -> Dict[str, int]:
-        """Guruhlar lug'ati: {nomi: chat_id}"""
-        try:
-            return json.loads(self.groups_raw)
-        except:
-            return {}
+    # Groups are managed in the database; no GROUPS env parsing needed.

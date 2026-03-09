@@ -31,3 +31,24 @@ async def seed_schools(session_factory) -> None:
             session.add(School(number=i, name=f"{i}-maktab"))
 
         await session.commit()
+
+
+
+async def add_school(session: AsyncSession, number: int, name: str | None = None) -> School:
+    existing = await get_school_by_number(session, number)
+    if existing:
+        return existing
+    school = School(number=number, name=name or f"{number}-maktab")
+    session.add(school)
+    await session.commit()
+    await session.refresh(school)
+    return school
+
+
+async def remove_school(session: AsyncSession, school_id: int) -> bool:
+    school = await get_school_by_id(session, school_id)
+    if not school:
+        return False
+    await session.delete(school)
+    await session.commit()
+    return True

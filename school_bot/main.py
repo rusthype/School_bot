@@ -4,7 +4,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, BotCommandScopeDefault
+from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 
 from school_bot.bot.config import Settings
 from school_bot.bot.handlers import (
@@ -37,8 +37,18 @@ from school_bot.bot.services.order_escalation_service import start_overdue_order
 from school_bot.bot.services.log_cleanup_service import LogCleanupService
 
 
-async def set_bot_commands(bot: Bot) -> None:
-    default_commands = [
+
+async def set_bot_commands(bot: Bot, superadmin_ids: list[int]) -> None:
+    base_commands = [
+        BotCommand(command="start", description="Botni ishga tushirish"),
+        BotCommand(command="help", description="Yordam"),
+        BotCommand(command="stop", description="Menyuni yopish"),
+        BotCommand(command="support", description="Admin bilan bog'lanish"),
+        BotCommand(command="order_books", description="Kitob buyurtma qilish"),
+        BotCommand(command="my_orders", description="Mening buyurtmalarim"),
+    ]
+
+    superadmin_commands = [
         BotCommand(command="start", description="Botni ishga tushirish"),
         BotCommand(command="help", description="Yordam"),
         BotCommand(command="stop", description="Menyuni yopish"),
@@ -62,19 +72,27 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="remove_admin", description="Admin o'chirish"),
         BotCommand(command="list_admins", description="Adminlar ro'yxati"),
         BotCommand(command="edit_admin_role", description="Admin roli"),
-        BotCommand(command="all_polls", description="Barcha ovozlar (superadmin)"),
+        BotCommand(command="all_polls", description="Barcha ovozlar"),
         BotCommand(command="add_teacher_manual", description="O'qituvchi qo'shish (manual)"),
         BotCommand(command="support", description="Admin bilan bog'lanish"),
-        BotCommand(command="reply", description="Murojaatga javob berish (admin)"),
-        BotCommand(command="admin_orders", description="Buyurtmalar (superadmin)"),
-        BotCommand(command="logs", description="Loglarni ko'rish (superadmin)"),
+        BotCommand(command="reply", description="Murojaatga javob berish"),
+        BotCommand(command="add_group", description="Guruh qo'shish"),
+        BotCommand(command="groups_ids", description="Guruh chat IDlari"),
+        BotCommand(command="pending_groups", description="Kutilayotgan guruhlar"),
+        BotCommand(command="users", description="Foydalanuvchilar menyusi"),
+        BotCommand(command="admin_orders", description="Buyurtmalar"),
+        BotCommand(command="logs", description="Loglarni ko'rish"),
     ]
     try:
-        await bot.set_my_commands(commands=default_commands, scope=BotCommandScopeDefault())
+        await bot.set_my_commands(commands=base_commands, scope=BotCommandScopeDefault())
+        for admin_id in superadmin_ids:
+            await bot.set_my_commands(
+                commands=superadmin_commands,
+                scope=BotCommandScopeChat(chat_id=admin_id),
+            )
         logging.info("Commands set successfully")
     except Exception as e:
         logging.warning(f"Could not set commands: {e}")
-
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
@@ -85,7 +103,7 @@ async def main() -> None:
     await init_models(engine)
     await seed_superadmins(session_factory=session_factory, superadmin_tg_ids=settings.superadmin_ids)
     await seed_schools(session_factory=session_factory)
-    await seed_groups(session_factory=session_factory, groups_fallback=settings.groups)
+    await seed_groups(session_factory=session_factory, groups_fallback={})
     await seed_book_categories(session_factory=session_factory)
 
     bot = Bot(
@@ -93,7 +111,7 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-    asyncio.create_task(set_bot_commands(bot))
+    asyncio.create_task(set_bot_commands(bot, settings.superadmin_ids))
     asyncio.create_task(start_overdue_order_watch(bot=bot, session_factory=session_factory))
     asyncio.create_task(start_log_cleanup_watch(settings))
 

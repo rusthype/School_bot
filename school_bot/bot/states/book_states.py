@@ -25,3 +25,7 @@ class BookDeleteStates(StatesGroup):
     select_category = State()
     select_book = State()
     confirm = State()
+
+
+class CategoryAddStates(StatesGroup):
+    waiting_for_name = State()

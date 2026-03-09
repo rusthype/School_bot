@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from school_bot.bot.services.logger_service import get_logger
+from school_bot.bot.config import Settings
 from school_bot.bot.services.pagination import SchoolPagination
 from school_bot.database.models import Profile, User, UserRole, School
 
@@ -119,6 +120,22 @@ async def notify_superadmins_new_registration(
 ) -> None:
     result = await session.execute(select(User).where(User.role == UserRole.superadmin))
     superadmins = result.scalars().all()
+
+    if not superadmins:
+        settings = Settings()
+        if settings.superadmin_ids:
+            for tg_id in settings.superadmin_ids:
+                user = (await session.execute(select(User).where(User.telegram_id == tg_id))).scalar_one_or_none()
+                if user is None:
+                    user = User(telegram_id=tg_id, full_name=None, role=UserRole.superadmin)
+                    session.add(user)
+                    await session.commit()
+                    await session.refresh(user)
+                else:
+                    if user.role != UserRole.superadmin:
+                        user.role = UserRole.superadmin
+                        await session.commit()
+                superadmins.append(user)
 
     # Load user for username and telegram id
     user = await session.get(User, profile.user_id)

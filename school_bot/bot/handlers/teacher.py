@@ -110,11 +110,12 @@ async def cmd_new_task(
     builder.adjust(1)
 
     await state.set_state(NewTaskStates.group_selection)
-    await message.answer(
+    prompt = await message.answer(
         "📋 Qaysi guruhga topshiriq yubormoqchisiz?\n\n"
         "❌ Bekor qilish uchun /cancel bosing",
         reply_markup=builder.as_markup()
     )
+    await state.update_data(last_prompt_message_id=prompt.message_id)
     execution_time = time.time() - start_time
     logger.info(
         f"/new_task bajarildi: {execution_time:.2f}s",

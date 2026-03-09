@@ -4,18 +4,53 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
+from sqlalchemy.exc import ProgrammingError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from school_bot.database.models import Group
 
 
+
+
+async def _execute_with_status_fallback(session: AsyncSession, stmt, fallback_stmt):
+    try:
+        return await session.execute(stmt)
+    except (ProgrammingError, OperationalError) as e:
+        msg = str(e).lower()
+        if "status" in msg and "column" in msg:
+            return await session.execute(fallback_stmt)
+        raise
+
+
 GROUPS_JSON_PATH = Path(__file__).resolve().parents[2] / "groups.json"
 
 
-async def list_groups(session: AsyncSession) -> list[Group]:
-    result = await session.execute(select(Group).order_by(Group.name))
+async def list_groups(session: AsyncSession, include_pending: bool = False) -> list[Group]:
+    stmt = select(Group)
+    if not include_pending:
+        stmt = stmt.where(or_(Group.status.is_(None), Group.status != "pending"))
+    result = await _execute_with_status_fallback(
+        session,
+        stmt.order_by(Group.name),
+        select(Group).order_by(Group.name),
+    )
     return list(result.scalars().all())
+
+
+async def list_pending_groups(session: AsyncSession) -> list[Group]:
+    try:
+        result = await session.execute(
+            select(Group)
+            .where(Group.status == "pending")
+            .order_by(Group.created_at.desc())
+        )
+        return list(result.scalars().all())
+    except (ProgrammingError, OperationalError) as e:
+        msg = str(e).lower()
+        if "status" in msg and "column" in msg:
+            return []
+        raise
 
 
 async def get_group_by_id(session: AsyncSession, group_id: int) -> Group | None:
@@ -37,13 +72,29 @@ async def get_groups_by_names(session: AsyncSession, names: Iterable[str]) -> li
     names = [n for n in names if n]
     if not names:
         return []
-    result = await session.execute(select(Group).where(Group.name.in_(names)).order_by(Group.name))
+    result = await _execute_with_status_fallback(
+        session,
+        select(Group)
+        .where(
+            Group.name.in_(names),
+            or_(Group.status.is_(None), Group.status != "pending"),
+        )
+        .order_by(Group.name),
+        select(Group).where(Group.name.in_(names)).order_by(Group.name),
+    )
     return list(result.scalars().all())
 
 
 async def list_groups_by_school(session: AsyncSession, school_id: int) -> list[Group]:
-    result = await session.execute(
-        select(Group).where(Group.school_id == school_id).order_by(Group.name)
+    result = await _execute_with_status_fallback(
+        session,
+        select(Group)
+        .where(
+            Group.school_id == school_id,
+            or_(Group.status.is_(None), Group.status != "pending"),
+        )
+        .order_by(Group.name),
+        select(Group).where(Group.school_id == school_id).order_by(Group.name),
     )
     return list(result.scalars().all())
 
@@ -54,8 +105,15 @@ async def add_group(
     chat_id: int,
     invite_link: str | None = None,
     school_id: int | None = None,
+    status: str = "active",
 ) -> Group:
-    group = Group(name=name, chat_id=chat_id, invite_link=invite_link, school_id=school_id)
+    group = Group(
+        name=name,
+        chat_id=chat_id,
+        invite_link=invite_link,
+        school_id=school_id,
+        status=status,
+    )
     session.add(group)
     await session.commit()
     await session.refresh(group)
@@ -69,6 +127,7 @@ async def update_group(
     chat_id: int | None = None,
     invite_link: str | None = None,
     school_id: int | None = None,
+    status: str | None = None,
 ) -> Group:
     if name is not None:
         group.name = name
@@ -78,6 +137,8 @@ async def update_group(
         group.invite_link = invite_link
     if school_id is not None:
         group.school_id = school_id
+    if status is not None:
+        group.status = status
     await session.commit()
     await session.refresh(group)
     return group

@@ -33,7 +33,7 @@ class MenuGuardMiddleware(BaseMiddleware):
                     return await handler(event, data)
 
             text = event.text or ""
-            if text.startswith("/start") or text.startswith("/help") or text.startswith("/stop"):
+            if text.startswith("/start") or text.startswith("/help") or text.startswith("/stop") or text.startswith("/cancel") or text == "🏠 Bosh menyu":
                 return await handler(event, data)
 
             if text.startswith("/") and not is_authorized:

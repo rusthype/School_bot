@@ -53,7 +53,7 @@ A production-ready Telegram bot for school/class management. It supports role-ba
 ```bash
 # 1) Clone
 https://github.com/yourusername/your-repo.git
-cd TelegramBotCursor
+cd School_bot
 
 # 2) Create venv
 python -m venv .venv
@@ -182,7 +182,7 @@ volumes:
 ## 📁 **Project Structure**
 
 ```
-TelegramBotCursor/
+School_bot/
 ├── school_bot/
 │   ├── bot/
 │   │   ├── handlers/        # Command + message handlers

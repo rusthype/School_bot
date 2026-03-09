@@ -168,3 +168,13 @@ downloads/
 conversations/
 states.json
 *.session
+
+# Sensitive / credentials
+*.p12
+*.pfx
+*secret*.json
+*credentials*.json
+backups/
+backup/
+*.dump
+*.sql.gz

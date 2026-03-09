@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from aiogram import Router, F
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from school_bot.bot.handlers.common import get_main_keyboard
+from school_bot.bot.handlers.common import get_main_keyboard, get_users_management_keyboard, cancel_current_action
 from school_bot.bot.services.logger_service import get_logger
+from school_bot.bot.utils.telegram import send_chunked_message
 from school_bot.bot.services.user_service import get_or_create_user, get_user_by_username
 from school_bot.bot.utils.parser import parse_telegram_input
 from school_bot.bot.states.admin_states import AddAdminStates, RemoveAdminStates, EditAdminRoleStates
@@ -135,6 +136,32 @@ async def cmd_add_admin(
     )
 
 
+@router.message(
+    Command("cancel"),
+    StateFilter(
+        AddAdminStates.waiting_for_user,
+        AddAdminStates.waiting_for_role,
+        RemoveAdminStates.waiting_for_user,
+        EditAdminRoleStates.waiting_for_user,
+        EditAdminRoleStates.waiting_for_role,
+    ),
+)
+async def admin_cancel_any_state(
+    message: Message,
+    state: FSMContext,
+    is_superadmin: bool = False,
+    is_teacher: bool = False,
+    is_librarian: bool = False,
+) -> None:
+    await cancel_current_action(
+        message,
+        state,
+        is_superadmin=is_superadmin,
+        is_teacher=is_teacher,
+        is_librarian=is_librarian,
+    )
+
+
 @router.message(AddAdminStates.waiting_for_user, F.text)
 async def add_admin_waiting_user(
     message: Message,
@@ -142,6 +169,8 @@ async def add_admin_waiting_user(
     session: AsyncSession,
 ) -> None:
     raw_text = (message.text or "").strip()
+    if raw_text.startswith("/"):
+        return
     user, _, error = await _find_user_by_input(session, message, raw_text, create_if_missing=True)
     if error:
         await message.answer(error)
@@ -166,13 +195,8 @@ async def cmd_remove_admin(
         raw = command.args.split()[0]
         await _process_remove_admin(message, state, session, raw, is_superadmin)
         return
-
-    await state.set_state(RemoveAdminStates.waiting_for_user)
-    await message.answer(
-        "👤 Adminlikdan olinadigan foydalanuvchining Telegram ID sini yoki Username ni yuboring:\n"
-        "Masalan: 123456789 yoki @username\n\n"
-        "❌ Bekor qilish uchun /cancel bosing"
-    )
+    await state.clear()
+    await _show_admin_remove_list(message, session)
 
 
 @router.message(RemoveAdminStates.waiting_for_user, F.text)
@@ -216,6 +240,186 @@ async def _process_remove_admin(
         f"🆔 ID: {user.telegram_id}",
         reply_markup=keyboard,
     )
+
+
+async def _show_admin_remove_list(message: Message, session: AsyncSession) -> None:
+    result = await session.execute(
+        select(User).where(User.role.in_([UserRole.superadmin, UserRole.librarian])).order_by(User.role, User.created_at)
+    )
+    admins = list(result.scalars().all())
+    if not admins:
+        await message.answer("📭 Hozircha adminlar yo'q.")
+        return
+
+    superadmins = [u for u in admins if u.role == UserRole.superadmin]
+    librarians = [u for u in admins if u.role == UserRole.librarian]
+
+    role_info = {
+        UserRole.superadmin: {
+            "emoji": "👑",
+            "title": "Superadmin",
+            "deletable": False,
+        },
+        UserRole.librarian: {
+            "emoji": "📚",
+            "title": "Kutubxonachi",
+            "deletable": True,
+        },
+    }
+
+    lines = [
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "👑 ADMIN O'CHIRISH",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        "O'chirmoqchi bo'lgan adminingizni tanlang:",
+        "",
+        f"📊 Jami adminlar: {len(admins)} ta ({len(superadmins)} superadmin, {len(librarians)} kutubxonachi)",
+    ]
+
+    builder = InlineKeyboardBuilder()
+    for admin in admins:
+        display_name = f"@{admin.username}" if admin.username else str(admin.telegram_id)
+        info = role_info.get(
+            admin.role,
+            {"emoji": "👤", "title": "Admin", "deletable": True},
+        )
+
+        if not info["deletable"]:
+            button_text = f"{info['emoji']} {display_name} · {info['title']} (o'chirib bo'lmaydi)"
+            builder.button(text=button_text, callback_data="delete_admin:self_blocked")
+        else:
+            button_text = f"{info['emoji']} {display_name} · {info['title']}"
+            builder.button(text=button_text, callback_data=f"delete_admin:select:{admin.id}")
+    builder.adjust(1)
+    builder.row(
+        InlineKeyboardButton(text="🔙 Orqaga", callback_data="delete_admin:back"),
+        InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="delete_admin:home"),
+    )
+
+    await message.answer("\n".join(lines), reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data == "delete_admin:self_blocked")
+async def admin_remove_blocked(callback: CallbackQuery, is_superadmin: bool = False) -> None:
+    if not is_superadmin:
+        await callback.answer()
+        return
+    await callback.answer("⛔ Superadminni o'chirib bo'lmaydi.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("delete_admin:select:"))
+async def admin_remove_select(callback: CallbackQuery, session: AsyncSession, is_superadmin: bool = False) -> None:
+    if not is_superadmin:
+        await callback.answer()
+        return
+
+    admin_id = int(callback.data.split(":")[2])
+    admin = await session.get(User, admin_id)
+    if not admin:
+        await callback.answer("❌ Admin topilmadi.", show_alert=True)
+        return
+
+    if admin.role == UserRole.superadmin:
+        await callback.answer("⛔ Superadminni o'chirib bo'lmaydi.", show_alert=True)
+        return
+
+    username = f"@{admin.username}" if admin.username else "(username yo'q)"
+    created = admin.created_at.strftime("%d.%m.%Y") if admin.created_at else "Noma'lum"
+
+    text = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ TASDIQLASH\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👨‍💼 Admin: {username}\n"
+        f"🆔 ID: {admin.telegram_id}\n"
+        f"📌 Rol: Admin\n"
+        f"📅 Qo'shilgan: {created}\n\n"
+        "🔴 DIQQAT!\n"
+        "Bu adminni o'chirsangiz:\n"
+        "• Barcha ruxsatlari yo'qoladi\n"
+        "• Qayta tiklanmaydi\n"
+        "• Admin sifatida kira olmaydi\n"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, o'chirish", callback_data=f"delete_admin:confirm:{admin.id}")
+    builder.button(text="❌ Bekor qilish", callback_data="delete_admin:cancel")
+    builder.adjust(2)
+
+    await callback.message.answer(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_admin:confirm:"))
+async def admin_remove_confirm(callback: CallbackQuery, session: AsyncSession, is_superadmin: bool = False) -> None:
+    if not is_superadmin:
+        await callback.answer()
+        return
+
+    admin_id = int(callback.data.split(":")[2])
+    admin = await session.get(User, admin_id)
+    if not admin:
+        await callback.answer("❌ Admin topilmadi.", show_alert=True)
+        return
+
+    if admin.role != UserRole.librarian:
+        await callback.answer("⛔ Faqat adminlarni o'chirish mumkin.", show_alert=True)
+        return
+
+    admin.role = None
+    await session.commit()
+
+    try:
+        await callback.bot.send_message(
+            admin.telegram_id,
+            "⚠️ Siz adminlikdan olib tashlandingiz.",
+        )
+    except Exception:
+        pass
+
+    await callback.message.answer("✅ Admin muvaffaqiyatli o'chirildi.")
+    await _show_admin_remove_list(callback.message, session)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "delete_admin:cancel")
+async def admin_remove_cancel(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer()
+        return
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer("✅ Bekor qilindi", show_alert=False)
+    await _show_admin_remove_list(callback.message, session)
+
+
+@router.callback_query(F.data == "delete_admin:back")
+async def admin_remove_back(callback: CallbackQuery, is_superadmin: bool = False) -> None:
+    if not is_superadmin:
+        await callback.answer()
+        return
+    await callback.message.answer(
+        "👥 Foydalanuvchilar boshqaruvi",
+        reply_markup=get_users_management_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "delete_admin:home")
+async def admin_remove_home(callback: CallbackQuery, is_superadmin: bool = False) -> None:
+    if not is_superadmin:
+        await callback.answer()
+        return
+    keyboard = get_main_keyboard(is_superadmin=True, is_teacher=False)
+    await callback.message.answer("🏠 Asosiy menyu", reply_markup=keyboard)
+    await callback.answer()
 
 
 @router.message(Command("edit_admin_role"))

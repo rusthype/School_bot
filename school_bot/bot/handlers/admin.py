@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandObject, StateFilter
+from aiogram.filters import Command, CommandObject, StateFilter, BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
@@ -28,6 +28,7 @@ from school_bot.bot.services.group_service import (
     remove_group,
     set_invite_link,
     list_groups_by_school,
+    list_pending_groups,
 )
 from school_bot.bot.services.school_service import list_schools, get_school_by_id
 from school_bot.bot.services.profile_service import (
@@ -48,13 +49,299 @@ from school_bot.bot.services.approval_service import (
 )
 from school_bot.bot.utils.parser import parse_telegram_input
 from school_bot.bot.services.logger_service import get_logger
+from school_bot.bot.services.pagination import SchoolPagination
 from school_bot.bot.states.group_management import GroupManagementStates
 from school_bot.bot.states.admin_states import AddTeacherManualStates
 from school_bot.database.models import User, UserRole, Task, Profile, School, PollVote
-from school_bot.bot.handlers.common import get_main_keyboard, cancel_current_action, get_skip_cancel_keyboard
+from school_bot.bot.handlers.group_join import _build_group_join_school_keyboard
+from school_bot.bot.handlers.common import (
+    get_main_keyboard,
+    get_users_management_keyboard,
+    cancel_current_action,
+    get_skip_cancel_keyboard,
+    show_groups_menu,
+)
 from school_bot.bot.utils.parser import parse_telegram_input
 
+MAX_TG_MESSAGE = 4000
+
+
+def _split_message(text: str, limit: int = MAX_TG_MESSAGE):
+    chunks = []
+    current = []
+    size = 0
+    for line in text.split("\n"):
+        line_len = len(line) + 1
+        if size + line_len > limit and current:
+            chunks.append("\n".join(current))
+            current = [line]
+            size = line_len
+        else:
+            current.append(line)
+            size += line_len
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+async def _send_chunked_message(message: Message, text: str) -> None:
+    for chunk in _split_message(text):
+        await message.answer(chunk)
+
+
+PAGE_SIZE_TEACHERS = 10
+PAGE_SIZE_GROUPS = 15
+
+
+def _build_page_keyboard(prefix: str, page: int, total_pages: int) -> InlineKeyboardMarkup | None:
+    if total_pages <= 1:
+        return None
+    builder = InlineKeyboardBuilder()
+    if page > 1:
+        builder.button(text="◀️ Oldingi", callback_data=f"{prefix}:{page - 1}")
+    builder.button(text=f"📍 {page}/{total_pages}", callback_data=f"{prefix}_info:{page}")
+    if page < total_pages:
+        builder.button(text="▶️ Keyingi", callback_data=f"{prefix}:{page + 1}")
+    builder.adjust(3)
+    return builder.as_markup()
+
+
+async def _send_teachers_page(target: Message, session: AsyncSession, page: int, edit: bool = False) -> None:
+    total = await session.scalar(
+        select(func.count()).select_from(User).where(User.role == UserRole.teacher)
+    )
+    total = total or 0
+    total_pages = max(1, (total + PAGE_SIZE_TEACHERS - 1) // PAGE_SIZE_TEACHERS)
+    page = max(1, min(page, total_pages))
+    offset = (page - 1) * PAGE_SIZE_TEACHERS
+
+    result = await session.execute(
+        select(User, Profile, School)
+        .join(Profile, User.id == Profile.user_id)
+        .outerjoin(School, Profile.school_id == School.id)
+        .where(User.role == UserRole.teacher)
+        .order_by(User.created_at)
+        .offset(offset)
+        .limit(PAGE_SIZE_TEACHERS)
+    )
+    teachers_data = result.all()
+
+    if not teachers_data:
+        result_message = "📭 Hozircha hech qanday o'qituvchi yo'q."
+    else:
+        lines = [f"👨‍🏫 O'qituvchilar ({page}/{total_pages})", f"Jami: {total} ta", ""]
+        for i, (teacher, profile, school) in enumerate(teachers_data, offset + 1):
+            full_name = f"{profile.first_name} {profile.last_name or ''}".strip() or teacher.full_name or "Ism yo'q"
+            username = f"@{teacher.username}" if teacher.username else "Yo'q"
+            phone = profile.phone if profile.phone else "Yo'q"
+            school_name = school.name if school else "Biriktirilmagan"
+            groups = profile.assigned_groups or []
+            groups_text = ", ".join(groups) if groups else "Yo'q"
+            lines.append(f"{i}. 🆔 {teacher.telegram_id}")
+            lines.append(f"   👤 {full_name}")
+            lines.append(f"   🔹 Username: {username}")
+            lines.append(f"   📱 Telefon: {phone}")
+            lines.append(f"   🏫 Maktab: {school_name}")
+            lines.append(f"   📚 Guruhlar: {groups_text}")
+            lines.append("")
+        result_message = "\n".join(lines).strip()
+
+    keyboard = _build_page_keyboard("teachers_page", page, total_pages)
+    if edit:
+        await target.edit_text(result_message, reply_markup=keyboard)
+    else:
+        await target.answer(result_message, reply_markup=keyboard)
+
+
+async def _send_groups_page(target: Message, session: AsyncSession, page: int, edit: bool = False) -> None:
+    groups = await list_groups(session)
+    total = len(groups)
+    if total == 0:
+        result_message = "📭 Hozircha hech qanday guruh yo'q. /add_group bilan qo'shing."
+        keyboard = None
+    else:
+        total_pages = max(1, (total + PAGE_SIZE_GROUPS - 1) // PAGE_SIZE_GROUPS)
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * PAGE_SIZE_GROUPS
+        end = start + PAGE_SIZE_GROUPS
+        page_groups = groups[start:end]
+        schools = await list_schools(session)
+        school_map = {s.id: s.name for s in schools}
+        lines = [f"📚 Guruhlar ({page}/{total_pages})", f"Jami: {total} ta", ""]
+        for group in page_groups:
+            school_name = school_map.get(group.school_id, "Maktab biriktirilmagan")
+            lines.append(f"• {group.name} — {school_name}")
+        result_message = "\n".join(lines).strip()
+        keyboard = _build_page_keyboard("groups_page", page, total_pages)
+
+    if edit:
+        await target.edit_text(result_message, reply_markup=keyboard)
+    else:
+        await target.answer(result_message, reply_markup=keyboard)
+
+
+async def _send_groups_ids_page(target: Message, session: AsyncSession, page: int, edit: bool = False) -> None:
+    groups = await list_groups(session, include_pending=False)
+    total = len(groups)
+    if total == 0:
+        result_message = "📭 Hozircha hech qanday guruh yo'q. /add_group bilan qo'shing."
+        keyboard = None
+    else:
+        total_pages = max(1, (total + PAGE_SIZE_GROUPS - 1) // PAGE_SIZE_GROUPS)
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * PAGE_SIZE_GROUPS
+        end = start + PAGE_SIZE_GROUPS
+        page_groups = groups[start:end]
+        schools = await list_schools(session)
+        school_map = {s.id: s.name for s in schools}
+        lines = [f"🆔 Guruhlar va chat IDlar ({page}/{total_pages})", f"Jami: {total} ta", ""]
+        for group in page_groups:
+            school_name = school_map.get(group.school_id, "Maktab biriktirilmagan")
+            lines.append(f"• {group.name} — `{group.chat_id}` ({school_name})")
+        result_message = "\n".join(lines).strip()
+        keyboard = _build_page_keyboard("groups_ids_page", page, total_pages)
+
+    if edit:
+        await target.edit_text(result_message, reply_markup=keyboard)
+    else:
+        await target.answer(result_message, reply_markup=keyboard)
+
+
 router = Router(name=__name__)
+
+
+@router.message(Command("all_polls"))
+async def cmd_all_polls(
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await message.answer("⛔ Bu buyruq faqat superadminlar uchun.")
+        return
+    await show_all_polls_list(message, session, edit=False)
+
+
+async def show_all_polls_list(
+        message: Message,
+        session: AsyncSession,
+        edit: bool = False,
+) -> None:
+    result = await session.execute(
+        select(Task)
+        .where(Task.poll_id.is_not(None))
+        .order_by(Task.created_at.desc())
+        .limit(20)
+    )
+    polls = result.scalars().all()
+    if not polls:
+        text = "📭 Hozircha so'rovnomalar yo'q."
+        if edit:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
+        return
+
+    lines = ["📊 **Barcha so'rovnomalar**", f"Jami: {len(polls)} ta", ""]
+    builder = InlineKeyboardBuilder()
+    for poll in polls:
+        date = poll.created_at.strftime("%d.%m") if poll.created_at else "--"
+        topic = poll.topic or "Topshiriq"
+        short_topic = topic[:30] + ("..." if len(topic) > 30 else "")
+        lines.append(f"📅 {date} · {short_topic}")
+        builder.button(text=f"📅 {date}: {short_topic}", callback_data=f"admin_poll_all_view:{poll.id}")
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_poll_cancel"))
+
+    text = "\n".join(lines).strip()
+    if edit:
+        await message.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())
+
+
+@router.callback_query(lambda c: c.data.startswith("admin_poll_all_view:"))
+async def admin_poll_all_view(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Bu amal faqat superadminlar uchun.", show_alert=True)
+        return
+    try:
+        task_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer("❌ Noto'g'ri topshiriq", show_alert=True)
+        return
+
+    task = (await session.execute(
+        select(Task)
+        .where(Task.id == task_id)
+        .options(selectinload(Task.poll_votes).selectinload(PollVote.user))
+    )).scalar_one_or_none()
+
+    if not task:
+        await callback.answer("❌ Topshiriq topilmadi!", show_alert=True)
+        return
+    if not task.poll_id:
+        await callback.answer("📭 Bu topshiriq uchun so'rovnoma yo'q.", show_alert=True)
+        return
+    if not task.poll_votes:
+        await callback.answer("📭 Bu topshiriq uchun hali ovoz berilmagan.", show_alert=True)
+        return
+
+    from school_bot.bot.handlers.teacher import format_poll_voters
+    text = format_poll_voters(task)
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🔙 Ortga", callback_data="admin_poll_all_back"))
+    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_poll_cancel"))
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin_poll_all_back")
+async def admin_poll_all_back(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Bu amal faqat superadminlar uchun.", show_alert=True)
+        return
+    await show_all_polls_list(callback.message, session, edit=True)
+    await callback.answer()
+
+
+class SuperadminOnly(BaseFilter):
+    async def __call__(self, event, is_superadmin: bool = False, state: FSMContext | None = None, **kwargs) -> bool:
+        if is_superadmin:
+            return True
+
+        # If user is in FSM flow, don't spam with superadmin warnings
+        if state is not None:
+            try:
+                current_state = await state.get_state()
+            except Exception:
+                current_state = None
+            if current_state is not None:
+                return False
+
+        if isinstance(event, Message):
+            text = (event.text or "").strip()
+            if text.startswith("/") and not text.startswith(("/start", "/help", "/stop", "/cancel")):
+                await event.answer("⛔ Bu bo'lim faqat superadminlar uchun.")
+        elif isinstance(event, CallbackQuery):
+            data = event.data or ""
+            if data.startswith("admin_"):
+                await event.answer("⛔ Bu bo'lim faqat superadminlar uchun.", show_alert=True)
+        return False
+
+
+router.message.filter(SuperadminOnly())
 logger = get_logger(__name__)
 
 
@@ -102,8 +389,6 @@ class RejectTeacherStates(StatesGroup):
     waiting_reason = State()
 
 
-
-
 @router.message(Command(commands=["pending_approvals", "kutayotganlar"]))
 async def cmd_pending_approvals(
         message: Message,
@@ -133,9 +418,9 @@ async def cmd_pending_approvals(
         f"⏳ **Tasdiqlanishi kutilayotgan o'qituvchilar** ({len(pending)} ta)"
     )
 
-    for idx, profile in enumerate(pending, start=1):
+    for profile in pending:
         user = await session.get(User, profile.user_id)
-        username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
+        username = f"@{user.username}" if user and user.username else "(username yo'q)"
         full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
         requested = profile.registered_at or datetime.utcnow()
         requested_str = requested.strftime("%d.%m.%Y %H:%M")
@@ -147,224 +432,19 @@ async def cmd_pending_approvals(
                 school_name = school.name
 
         text = (
-            f"{idx}. {full_name} ({username}) - {profile.phone}\n"
+            f"👤 {full_name}\n"
+            f"🔹 {username}\n"
+            f"📱 {profile.phone}\n"
             f"🏫 Maktab: {school_name}\n"
-            f"📅 {requested_str}"
+            f"📅 So'rov: {requested_str}"
         )
 
         builder = InlineKeyboardBuilder()
-        builder.button(text="✅ Tasdiqlash", callback_data=f"pending_approve:{profile.id}")
+        builder.button(text="✅ Ko'rish / Tasdiqlash", callback_data=f"pending_approve:{profile.id}")
         builder.button(text="❌ Rad etish", callback_data=f"approve_reject:{profile.id}")
         builder.adjust(2)
 
         await message.answer(text, reply_markup=builder.as_markup())
-
-
-
-async def show_all_teachers_overview(
-        message: Message,
-        session: AsyncSession,
-        state: FSMContext,
-        edit: bool = False,
-) -> None:
-    result = await session.execute(
-        select(User, Profile, School)
-        .join(Profile, Profile.user_id == User.id)
-        .join(School, Profile.school_id == School.id)
-        .where(User.role == UserRole.teacher)
-        .order_by(School.number, Profile.first_name, Profile.last_name)
-    )
-    rows = result.all()
-
-    if not rows:
-        await message.answer("📭 Hozircha hech qanday o'qituvchi yo'q.")
-        return
-
-    schools: list[School] = []
-    seen_school_ids: set[int] = set()
-    teachers_by_school: dict[int, list[tuple[User, Profile]]] = {}
-    for user, profile, school in rows:
-        if school.id not in seen_school_ids:
-            seen_school_ids.add(school.id)
-            schools.append(school)
-        teachers_by_school.setdefault(school.id, []).append((user, profile))
-
-    lines = ["👨‍🏫 <b>O'qituvchilar ro'yxati:</b>", ""]
-    for school in schools:
-        lines.append(f"🏫 <b>{school.name}:</b>")
-        teachers = teachers_by_school.get(school.id, [])
-        for user, profile in teachers:
-            name = f"{profile.first_name} {profile.last_name or ''}".strip()
-            if not name:
-                name = user.full_name or f"ID: {user.telegram_id}"
-            username = f" (@{user.username})" if user.username else ""
-            lines.append(f"   • {name}{username}")
-        lines.append("")
-
-    filter_builder = InlineKeyboardBuilder()
-    for school in schools:
-        filter_builder.button(
-            text=f"{school.number}-m",
-            callback_data=f"admin_poll_school_filter:{school.id}",
-        )
-    filter_builder.adjust(4)
-    filter_builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_poll_cancel"))
-
-    await state.update_data(poll_school_page=1)
-
-    text = "\n".join(lines).strip()
-    if edit:
-        await message.edit_text(text, reply_markup=filter_builder.as_markup())
-    else:
-        await message.answer(text, reply_markup=filter_builder.as_markup())
-
-
-@router.message(Command("all_polls"))
-async def cmd_all_polls(
-        message: Message,
-        session: AsyncSession,
-        state: FSMContext,
-        is_superadmin: bool = False,
-) -> None:
-    if not is_superadmin:
-        await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
-        return
-
-    await state.clear()
-    await show_all_teachers_overview(message, session, state)
-
-
-async def show_teachers_by_school(
-        message: Message,
-        session: AsyncSession,
-        school_id: int,
-        state: FSMContext,
-        edit: bool = True,
-) -> None:
-    school = await get_school_by_id(session, school_id)
-    if not school:
-        if edit:
-            await message.edit_text("❌ Maktab topilmadi.")
-        else:
-            await message.answer("❌ Maktab topilmadi.")
-        return
-
-    result = await session.execute(
-        select(User, Profile)
-        .join(Profile, Profile.user_id == User.id)
-        .where(Profile.school_id == school_id, User.role == UserRole.teacher)
-        .order_by(Profile.first_name, Profile.last_name)
-    )
-    rows = result.all()
-
-    if not rows:
-        text = f"👨‍🏫 <b>{school.name} o'qituvchilari:</b>\n\n• O'qituvchi yo'q"
-        builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🔙 Barcha o'qituvchilar", callback_data="admin_poll_back_to_all"))
-        builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_poll_cancel"))
-        if edit:
-            await message.edit_text(text, reply_markup=builder.as_markup())
-        else:
-            await message.answer(text, reply_markup=builder.as_markup())
-        return
-
-    await state.update_data(poll_school_id=school_id)
-
-    lines = [f"👨‍🏫 <b>{school.name} o'qituvchilari:</b>", ""]
-    builder = InlineKeyboardBuilder()
-    for user, profile in rows:
-        name = f"{profile.first_name} {profile.last_name or ''}".strip()
-        if not name:
-            name = user.full_name or f"ID: {user.telegram_id}"
-        username = f" (@{user.username})" if user.username else ""
-        lines.append(f"• {name}{username}")
-        button_label = (name[:20] + "…" if len(name) > 20 else name)
-        builder.button(
-            text=button_label,
-            callback_data=f"admin_poll_teacher:{user.id}",
-        )
-
-    builder.adjust(1)
-    builder.row(InlineKeyboardButton(text="🔙 Barcha o'qituvchilar", callback_data="admin_poll_back_to_all"))
-    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_poll_cancel"))
-
-    text = "\n".join(lines).strip()
-    if edit:
-        await message.edit_text(text, reply_markup=builder.as_markup())
-    else:
-        await message.answer(text, reply_markup=builder.as_markup())
-
-
-@router.callback_query(lambda c: c.data.startswith("admin_poll_school_filter:"))
-async def select_school_for_polls(
-        callback: CallbackQuery,
-        session: AsyncSession,
-        state: FSMContext,
-        is_superadmin: bool = False,
-) -> None:
-    if not is_superadmin:
-        await callback.answer("⛔ Bu amal faqat superadminlar uchun.", show_alert=True)
-        return
-
-    try:
-        school_id = int(callback.data.split(":", 1)[1])
-    except ValueError:
-        await callback.answer("❌ Noto'g'ri maktab", show_alert=True)
-        return
-    await show_teachers_by_school(callback.message, session, school_id, state, edit=True)
-    await callback.answer()
-
-
-@router.callback_query(lambda c: c.data.startswith("admin_poll_teacher:"))
-async def select_teacher_for_polls(
-        callback: CallbackQuery,
-        session: AsyncSession,
-        state: FSMContext,
-        is_superadmin: bool = False,
-) -> None:
-    if not is_superadmin:
-        await callback.answer("⛔ Bu amal faqat superadminlar uchun.", show_alert=True)
-        return
-
-    try:
-        teacher_id = int(callback.data.split(":", 1)[1])
-    except ValueError:
-        await callback.answer("❌ Noto'g'ri o'qituvchi", show_alert=True)
-        return
-
-    result = await session.execute(
-        select(Task)
-        .where(Task.teacher_id == teacher_id)
-        .order_by(Task.created_at.desc())
-        .limit(20)
-    )
-    polls = result.scalars().all()
-
-    if not polls:
-        await callback.answer("❌ Bu o'qituvchi hali topshiriq yaratmagan!", show_alert=True)
-        return
-
-    await state.update_data(poll_teacher_id=teacher_id)
-
-    builder = InlineKeyboardBuilder()
-    for poll in polls:
-        date = poll.created_at.strftime("%d.%m")
-        topic = poll.topic or "Topshiriq"
-        short_topic = topic[:30] + ("..." if len(topic) > 30 else "")
-        builder.button(
-            text=f"📅 {date}: {short_topic}",
-            callback_data=f"admin_poll_view:{poll.id}",
-        )
-    builder.adjust(1)
-
-    builder.row(InlineKeyboardButton(text="🔙 Ortga", callback_data="admin_poll_back_to_teachers"))
-    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_poll_cancel"))
-
-    await callback.message.edit_text(
-        "📊 <b>Topshiriqni tanlang:</b>",
-        reply_markup=builder.as_markup(),
-    )
-    await callback.answer()
 
 
 @router.callback_query(lambda c: c.data.startswith("admin_poll_view:"))
@@ -524,7 +604,6 @@ async def admin_poll_cancel(
     await cancel_current_action(callback, state, is_superadmin=True)
 
 
-
 # Umumiy cancel handler - har qanday admin state dan chiqish uchun
 @router.message(Command("cancel"),
                 StateFilter(AddTeacherStates, RemoveTeacherStates, GroupManagementStates, RejectTeacherStates))
@@ -602,12 +681,11 @@ async def approval_select_school(
     groups = await list_groups_by_school(session, school.id)
 
     text = (
-        "👑 Yangi o'qituvchi ro'yxatdan o'tishi:\n\n"
-        f"👤 Ism: {full_name}\n"
-        f"🔹 Foydalanuvchi nomi: {username}\n"
-        f"📱 Telefon: {profile.phone}\n\n"
-        f"Tanlangan maktab: {school.name}\n\n"
-        "Ushbu maktab uchun guruhlarni tanlang:"
+        f"👤 {full_name}\n"
+        f"🔹 {username}\n"
+        f"📱 {profile.phone}\n"
+        f"🏫 Maktab: {school_name}\n"
+        f"📅 So'rov: {requested_str}"
     )
 
     if not groups:
@@ -650,12 +728,11 @@ async def approval_school_page(
     keyboard = build_school_keyboard(profile_id, schools, page=page, per_page=10)
 
     text = (
-        "👑 Yangi o'qituvchi ro'yxatdan o'tishi:\n\n"
-        f"👤 Ism: {full_name}\n"
-        f"🔹 Foydalanuvchi nomi: {username}\n"
-        f"📱 Telefon: {profile.phone}\n\n"
-        "Qaysi maktabga tegishli?\n\n"
-        f"🏫 Maktabni tanlang ({page}/{total_pages} sahifa):"
+        f"👤 {full_name}\n"
+        f"🔹 {username}\n"
+        f"📱 {profile.phone}\n"
+        f"🏫 Maktab: {school_name}\n"
+        f"📅 So'rov: {requested_str}"
     )
 
     await callback.message.edit_text(text, reply_markup=keyboard)
@@ -924,7 +1001,6 @@ async def cmd_add_teacher_start(
         state: FSMContext,
         is_superadmin: bool = False,
 ) -> None:
-
     if not is_superadmin:
         await message.answer("⛔ Siz o'qituvchilarni boshqarish huquqiga ega emassiz.")
         return
@@ -1037,6 +1113,43 @@ async def cmd_add_teacher_process(
 
 
 # ============== GROUP MANAGEMENT ==============
+@router.message(Command("groups_ids"))
+async def cmd_groups_ids(
+        message: Message,
+        session: AsyncSession,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
+        return
+
+    await _send_groups_ids_page(message, session, page=1, edit=False)
+
+
+@router.callback_query(lambda c: c.data.startswith("groups_ids_page:"))
+async def groups_ids_page_callback(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
+        return
+    try:
+        _, page_str = callback.data.split(":")
+        page = int(page_str)
+    except (ValueError, AttributeError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+    await _send_groups_ids_page(callback.message, session, page=page, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("groups_ids_page_info:"))
+async def groups_ids_page_info(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
 @router.message(Command("groups"))
 async def cmd_groups(
         message: Message,
@@ -1047,27 +1160,98 @@ async def cmd_groups(
         await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
         return
 
-    groups = await list_groups(session)
-    if not groups:
-        await message.answer("📭 Hozircha hech qanday guruh yo'q. /add_group bilan qo'shing.")
+    await _send_groups_page(message, session, page=1, edit=False)
+
+
+@router.callback_query(lambda c: c.data.startswith("groups_page:"))
+async def groups_page_callback(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
+        return
+    try:
+        _, page_str = callback.data.split(":")
+        page = int(page_str)
+    except (ValueError, AttributeError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+    await _send_groups_page(callback.message, session, page=page, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("groups_page_info:"))
+async def groups_page_info(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+@router.message(Command(commands=["pending_groups", "kutayotgan_guruhlar"]))
+async def cmd_pending_groups(
+        message: Message,
+        session: AsyncSession,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
+        return
+
+    pending = await list_pending_groups(session)
+    if not pending:
+        await message.answer("📭 Hozircha kutilayotgan guruh yo'q.")
+        return
+
+    builder = InlineKeyboardBuilder()
+    for group in pending:
+        builder.button(
+            text=f"⏳ {group.name} ({group.chat_id})",
+            callback_data=f"pending_group_select:{group.id}",
+        )
+    builder.adjust(1)
+
+    await message.answer(
+        f"⏳ **Kutilayotgan guruhlar** ({len(pending)} ta)\n\n"
+        "Maktab biriktirish uchun guruhni tanlang:",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(lambda c: c.data.startswith("pending_group_select:"))
+async def pending_group_select(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
+        return
+
+    try:
+        _, group_id_str = callback.data.split(":")
+        group_id = int(group_id_str)
+    except (ValueError, AttributeError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    group = await get_group_by_id(session, group_id)
+    if not group:
+        await callback.answer("❌ Guruh topilmadi.", show_alert=True)
         return
 
     schools = await list_schools(session)
-    school_map = {s.id: s.name for s in schools}
+    if not schools:
+        await callback.message.edit_text("❌ Maktablar ro'yxati bo'sh. Avval /add_school orqali maktab qo'shing.")
+        await callback.answer()
+        return
+    total_pages = max(1, (len(schools) + 9) // 10)
+    keyboard = _build_group_join_school_keyboard(group.chat_id, schools, page=1, per_page=10)
 
-    grouped: dict[str, list[str]] = {}
-    for group in groups:
-        school_name = school_map.get(group.school_id, "Maktab biriktirilmagan")
-        grouped.setdefault(school_name, []).append(group.name)
-
-    lines = ["📚 **Barcha guruhlar:**", ""]
-    for school_name, group_names in grouped.items():
-        lines.append(f"🏫 {school_name}:")
-        for group_name in sorted(group_names):
-            lines.append(f"  • {group_name}")
-        lines.append("")
-
-    await message.answer("\n".join(lines).strip())
+    await callback.message.edit_text(
+        f"🏫 **{group.name}** uchun maktabni tanlang (1/{total_pages} sahifa):",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
 
 
 @router.message(Command("set_invite_link"))
@@ -1422,11 +1606,13 @@ async def cmd_edit_group_skip_chat_id(
     if data.get("new_name") is None and data.get("school_id") is None:
         await message.answer("ℹ️ O'zgarish yo'q.")
         await state.clear()
+        await show_groups_menu(message, is_superadmin=True)
         return
 
     await update_group(session, group, name=data.get("new_name"), school_id=data.get("school_id"))
     await state.clear()
     await message.answer(f"✅ Guruh yangilandi: {group.name}")
+    await show_groups_menu(message, is_superadmin=True)
 
 
 @router.message(GroupManagementStates.edit_chat_id, F.text)
@@ -1462,6 +1648,7 @@ async def cmd_edit_group_chat_id(
     )
     await state.clear()
     await message.answer(f"✅ Guruh yangilandi: {group.name} ({group.chat_id})")
+    await show_groups_menu(message, is_superadmin=True)
 
 
 @router.message(Command("remove_group"))
@@ -1623,54 +1810,38 @@ async def cmd_list_teachers(
         await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
         return
 
-    result = await session.execute(
-        select(User, Profile, School)
-        .join(Profile, User.id == Profile.user_id)
-        .outerjoin(School, Profile.school_id == School.id)
-        .where(User.role == UserRole.teacher)
-        .order_by(User.created_at)
-    )
-    teachers_data = result.all()
+    await _send_teachers_page(message, session, page=1, edit=False)
 
-    if not teachers_data:
-        result_message = "📭 Hozircha hech qanday o'qituvchi yo'q."
-    else:
-        lines = ["👨‍🏫 **Barcha o'qituvchilar:**", ""]
-        for i, (teacher, profile, school) in enumerate(teachers_data, 1):
-            if profile.first_name and profile.last_name:
-                full_name = f"{profile.first_name} {profile.last_name}"
-            elif profile.first_name:
-                full_name = profile.first_name
-            else:
-                full_name = teacher.full_name or "❌ Ism yo'q (Telegram profilda ism kiritilmagan)"
 
-            username = f"@{teacher.username}" if teacher.username else "Yo'q"
-            phone = profile.phone if profile.phone else "Yo'q"
-            school_name = school.name if school else "Biriktirilmagan"
-            groups = profile.assigned_groups or []
-            groups_text = ", ".join(groups) if groups else "Yo'q"
-            created = profile.registered_at.strftime("%d.%m.%Y") if profile.registered_at else "Noma'lum"
+@router.callback_query(lambda c: c.data.startswith("teachers_page:"))
+async def teachers_page_callback(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
+        return
+    try:
+        _, page_str = callback.data.split(":")
+        page = int(page_str)
+    except (ValueError, AttributeError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+    await _send_teachers_page(callback.message, session, page=page, edit=True)
+    await callback.answer()
 
-            lines.append(f"{i}. 🆔 {teacher.telegram_id}")
-            lines.append(f"   👤 {full_name}")
-            lines.append(f"   🔹 Username: {username}")
-            lines.append(f"   📱 Telefon: {phone}")
-            lines.append(f"   🏫 Maktab: {school_name}")
-            lines.append(f"   📚 Guruhlar: {groups_text}")
-            lines.append(f"   📅 Qo'shilgan: {created}")
-            lines.append("")
-        result_message = "\n".join(lines)
 
-    # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superadmin=True, is_teacher=False)
-    await message.answer(result_message, reply_markup=keyboard)
+@router.callback_query(lambda c: c.data.startswith("teachers_page_info:"))
+async def teachers_page_info(callback: CallbackQuery) -> None:
+    await callback.answer()
 
 
 # ============== MANUAL ADD TEACHER ==============
 async def _resolve_user_from_input(
-    session: AsyncSession,
-    message: Message,
-    raw_text: str,
+        session: AsyncSession,
+        message: Message,
+        raw_text: str,
 ) -> tuple[User | None, str | None]:
     parsed = parse_telegram_input(raw_text)
     if parsed is None:
@@ -1698,9 +1869,9 @@ async def _resolve_user_from_input(
 
 @router.message(Command("add_teacher_manual"))
 async def cmd_add_teacher_manual_start(
-    message: Message,
-    state: FSMContext,
-    is_superadmin: bool = False,
+        message: Message,
+        state: FSMContext,
+        is_superadmin: bool = False,
 ) -> None:
     if not is_superadmin:
         await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
@@ -1716,10 +1887,10 @@ async def cmd_add_teacher_manual_start(
 
 @router.message(AddTeacherManualStates.waiting_for_user, F.text)
 async def add_teacher_manual_waiting_user(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession,
-    is_superadmin: bool = False,
+        message: Message,
+        state: FSMContext,
+        session: AsyncSession,
+        is_superadmin: bool = False,
 ) -> None:
     if not is_superadmin:
         await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
@@ -1786,71 +1957,11 @@ async def cmd_users(
         session: AsyncSession,
         is_superadmin: bool = False,
 ) -> None:
-    """Barcha foydalanuvchilar ro'yxati (faqat superadmin)"""
+    """Users management menu (faqat superadmin)"""
     if not is_superadmin:
-        await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
+        await message.answer("⛔ You don't have permission to access this section.")
         return
-
-    result = await session.execute(select(User).order_by(User.created_at.desc()))
-    users = result.scalars().all()
-
-    if not users:
-        result_message = "📭 Hozircha hech qanday foydalanuvchi yo'q."
-    else:
-        school_rows = await session.execute(
-            select(Profile.user_id, School.name)
-            .select_from(Profile)
-            .join(School, Profile.school_id == School.id, isouter=True)
-        )
-        school_map = {user_id: school_name for user_id, school_name in school_rows.all()}
-
-        superadmins = [u for u in users if u.role == UserRole.superadmin]
-        teachers = [u for u in users if u.role == UserRole.teacher]
-        regulars = [u for u in users if u.role is None]
-
-        def fmt_user(u: User, school_name: str | None = None) -> str:
-            username = f"@{u.username}" if u.username else "username yo'q"
-            name = u.full_name or "Ism yo'q"
-            base = f"• {username} ({name}) - ID: {u.telegram_id}"
-            if school_name is not None:
-                return f"{base} - Maktab: {school_name}"
-            return base
-
-        lines = [
-            "👥 **Barcha foydalanuvchilar**",
-            f"Jami: {len(users)} ta",
-            "",
-        ]
-
-        lines.append(f"👑 **Superadminlar** ({len(superadmins)} ta):")
-        for u in superadmins[:50]:
-            lines.append(fmt_user(u))
-        if len(superadmins) > 50:
-            lines.append(f"... va yana {len(superadmins) - 50} ta")
-        lines.append("")
-
-        lines.append(f"👨‍🏫 **O'qituvchilar** ({len(teachers)} ta):")
-        for u in teachers[:50]:
-            school_name = school_map.get(u.id) or "Maktab biriktirilmagan"
-            lines.append(fmt_user(u, school_name))
-        if len(teachers) > 50:
-            lines.append(f"... va yana {len(teachers) - 50} ta")
-        lines.append("")
-
-        lines.append(f"👤 **Oddiy foydalanuvchilar** ({len(regulars)} ta):")
-        for u in regulars[:50]:
-            lines.append(fmt_user(u))
-        if len(regulars) > 50:
-            lines.append(f"... va yana {len(regulars) - 50} ta")
-
-        lines.append("")
-        lines.append(f"📅 Oxirgi yangilanish: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-
-        result_message = "\n".join(lines)
-
-    # Asosiy menyuni qaytarish
-    keyboard = get_main_keyboard(is_superadmin=True, is_teacher=False)
-    await message.answer(result_message, reply_markup=keyboard)
+    await message.answer("Menyudan tanlang...", reply_markup=get_users_management_keyboard())
 
 
 # ============== STATS ==============
@@ -1870,7 +1981,9 @@ async def cmd_stats(
     teachers_count = await session.scalar(select(func.count()).where(User.role == UserRole.teacher))
     superadmins_count = await session.scalar(select(func.count()).where(User.role == UserRole.superadmin))
     librarians_count = await session.scalar(select(func.count()).where(User.role == UserRole.librarian))
-    regular_users = await session.scalar(select(func.count()).where(User.role.is_(None)))
+    regular_users = await session.scalar(
+        select(func.count()).where((User.role == UserRole.student) | (User.role.is_(None)))
+    )
     tasks_count = await session.scalar(select(func.count()).select_from(Task))
 
     # Eng faol teacherlar

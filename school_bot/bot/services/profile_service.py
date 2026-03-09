@@ -71,7 +71,7 @@ async def upsert_student_profile(
     first_name: str,
     last_name: str | None,
     phone: str,
-    class_name: str,
+    class_name: str | None,
     school_id: int | None = None,
 ) -> Profile:
     profile = await get_profile_by_user_id(session, user_id)
@@ -82,7 +82,7 @@ async def upsert_student_profile(
         profile.phone = phone
         profile.school_id = school_id
         profile.profile_type = "student"
-        profile.assigned_groups = [class_name]
+        profile.assigned_groups = [class_name] if class_name else []
         profile.registered_at = datetime.utcnow()
         profile.is_approved = True
         profile.approved_by = None
@@ -100,7 +100,7 @@ async def upsert_student_profile(
         phone=phone,
         school_id=school_id,
         profile_type="student",
-        assigned_groups=[class_name],
+        assigned_groups=[class_name] if class_name else [],
         registered_at=datetime.utcnow(),
         is_approved=True,
         approved_by=None,

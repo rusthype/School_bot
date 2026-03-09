@@ -16,6 +16,7 @@ class UserRole(str, enum.Enum):
     superadmin = "superadmin"
     teacher = "teacher"
     librarian = "librarian"
+    student = "student"
 
 
 class User(Base):
@@ -265,6 +266,7 @@ class Group(Base):
     name: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     invite_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     school_id: Mapped[int | None] = mapped_column(
         ForeignKey("schools.id", ondelete="SET NULL"),
         nullable=True,
