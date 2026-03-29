@@ -17,7 +17,7 @@ def parse_telegram_input(text: str) -> tuple[str, str | int] | None:
             return ("username", username)
         return None
 
-    if text.isdigit():
+    if text.lstrip('-').isdigit():
         return ("id", int(text))
 
     if re.match(r'^[a-zA-Z][a-zA-Z0-9_]{4,31}$', text):

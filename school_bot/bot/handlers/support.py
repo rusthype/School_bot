@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Router, F
 from aiogram.filters import Command, CommandObject
@@ -234,7 +234,7 @@ async def cmd_reply_ticket(
     ticket.status = "replied"
     ticket.admin_reply = reply_text
     ticket.replied_by = db_user.id
-    ticket.replied_at = datetime.now()
+    ticket.replied_at = datetime.now(timezone.utc)
     await session.commit()
 
     user = await session.get(User, ticket.user_id)

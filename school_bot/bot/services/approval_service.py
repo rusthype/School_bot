@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -16,14 +17,32 @@ from school_bot.database.models import Profile, User, UserRole, School
 
 _APPROVAL_SELECTIONS: dict[tuple[int, int], set[int]] = defaultdict(set)
 _APPROVAL_SCHOOLS: dict[tuple[int, int], int] = {}
+_APPROVAL_TIMESTAMPS: dict[tuple[int, int], float] = {}
+_APPROVAL_TTL = 600.0  # 10 minutes
+
+
+def _cleanup_expired_approval_state() -> None:
+    """Remove approval entries older than _APPROVAL_TTL seconds."""
+    now = time.monotonic()
+    expired = [key for key, ts in _APPROVAL_TIMESTAMPS.items() if now - ts > _APPROVAL_TTL]
+    for key in expired:
+        _APPROVAL_SELECTIONS.pop(key, None)
+        _APPROVAL_SCHOOLS.pop(key, None)
+        _APPROVAL_TIMESTAMPS.pop(key, None)
+
+
+def _touch_approval_key(key: tuple[int, int]) -> None:
+    _APPROVAL_TIMESTAMPS[key] = time.monotonic()
 logger = get_logger(__name__)
 
 
 def get_selected_group_ids(admin_id: int, profile_id: int) -> set[int]:
+    _cleanup_expired_approval_state()
     return set(_APPROVAL_SELECTIONS.get((admin_id, profile_id), set()))
 
 
 def toggle_selected_group(admin_id: int, profile_id: int, group_id: int) -> set[int]:
+    _cleanup_expired_approval_state()
     key = (admin_id, profile_id)
     selected = _APPROVAL_SELECTIONS.get(key, set())
     if group_id in selected:
@@ -31,6 +50,7 @@ def toggle_selected_group(admin_id: int, profile_id: int, group_id: int) -> set[
     else:
         selected.add(group_id)
     _APPROVAL_SELECTIONS[key] = selected
+    _touch_approval_key(key)
     return set(selected)
 
 
@@ -38,16 +58,21 @@ def clear_selections_for_profile(profile_id: int) -> None:
     keys = [key for key in _APPROVAL_SELECTIONS.keys() if key[1] == profile_id]
     for key in keys:
         _APPROVAL_SELECTIONS.pop(key, None)
+        _APPROVAL_TIMESTAMPS.pop(key, None)
     school_keys = [key for key in _APPROVAL_SCHOOLS.keys() if key[1] == profile_id]
     for key in school_keys:
         _APPROVAL_SCHOOLS.pop(key, None)
+        _APPROVAL_TIMESTAMPS.pop(key, None)
 
 
 def set_selected_school(admin_id: int, profile_id: int, school_id: int) -> None:
-    _APPROVAL_SCHOOLS[(admin_id, profile_id)] = school_id
+    key = (admin_id, profile_id)
+    _APPROVAL_SCHOOLS[key] = school_id
+    _touch_approval_key(key)
 
 
 def get_selected_school(admin_id: int, profile_id: int) -> int | None:
+    _cleanup_expired_approval_state()
     return _APPROVAL_SCHOOLS.get((admin_id, profile_id))
 
 

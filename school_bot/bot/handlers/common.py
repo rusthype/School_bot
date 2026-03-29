@@ -270,6 +270,7 @@ async def cancel_current_action(
         data = {}
     last_prompt_id = data.get("last_prompt_message_id")
     await state.clear()
+    await state.update_data(menu_active=True)
     if db_user and getattr(db_user, "role", None) == UserRole.superadmin:
         is_superadmin = True
         is_teacher = False

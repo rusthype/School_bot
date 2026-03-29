@@ -81,6 +81,7 @@ async def teacher_check_in_location(
     session: AsyncSession,
     db_user,
     is_teacher: bool = False,
+    is_superadmin: bool = False,
 ) -> None:
     if not is_teacher:
         return
@@ -109,7 +110,7 @@ async def teacher_check_in_location(
                 inside_text,
             ]
         ),
-        reply_markup=get_main_keyboard(is_teacher=True),
+        reply_markup=get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher),
     )
 
 
@@ -123,6 +124,7 @@ async def teacher_check_out_location(
     session: AsyncSession,
     db_user,
     is_teacher: bool = False,
+    is_superadmin: bool = False,
 ) -> None:
     if not is_teacher:
         return
@@ -151,7 +153,7 @@ async def teacher_check_out_location(
                 inside_text,
             ]
         ),
-        reply_markup=get_main_keyboard(is_teacher=True),
+        reply_markup=get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher),
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -14,6 +15,9 @@ from school_bot.database.models import Profile, UserRole
 from school_bot.bot.services.logger_service import get_logger
 
 logger = get_logger(__name__)
+
+_admin_cache: dict[int, tuple[list, float]] = {}  # group_id -> (members, timestamp)
+_ADMIN_CACHE_TTL = 60.0  # seconds
 
 
 class UserContextMiddleware(BaseMiddleware):
@@ -72,7 +76,13 @@ class UserContextMiddleware(BaseMiddleware):
             try:
                 bot = data.get("bot")
                 if bot:
-                    admins = await bot.get_chat_administrators(self._admin_group_id)
+                    cached = _admin_cache.get(self._admin_group_id)
+                    now = time.monotonic()
+                    if cached is not None and now - cached[1] < _ADMIN_CACHE_TTL:
+                        admins = cached[0]
+                    else:
+                        admins = await bot.get_chat_administrators(self._admin_group_id)
+                        _admin_cache[self._admin_group_id] = (admins, now)
                     is_group_admin = any(admin.user.id == tg_user.id for admin in admins)
             except Exception:
                 logger.warning("Failed to check group admins", exc_info=True)
