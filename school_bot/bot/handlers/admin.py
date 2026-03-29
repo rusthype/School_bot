@@ -63,6 +63,7 @@ from school_bot.bot.handlers.common import (
 )
 
 MAX_TG_MESSAGE = 4000
+_STALE_APPROVAL_MSG = "Bu so'rov allaqachon ko'rib chiqilgan yoki muddati o'tgan."
 
 
 def _split_message(text: str, limit: int = MAX_TG_MESSAGE):
@@ -630,12 +631,21 @@ async def approval_toggle_group(
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
 
-    school_id = get_selected_school(db_user.id, profile_id)
+    profile = await get_profile_by_id(session, profile_id)
+    if not profile or profile.is_approved or profile.rejected_at or profile.removed_at:
+        try:
+            await callback.message.edit_text(_STALE_APPROVAL_MSG)
+        except Exception:
+            pass
+        await callback.answer(_STALE_APPROVAL_MSG, show_alert=True)
+        return
+
+    school_id = await get_selected_school(db_user.id, profile_id)
     if not school_id:
         await callback.answer("Avval maktabni tanlang.", show_alert=True)
         return
 
-    selected = toggle_selected_group(db_user.id, profile_id, group_id)
+    selected = await toggle_selected_group(db_user.id, profile_id, group_id)
     keyboard = await build_approval_keyboard(session, profile_id, school_id, selected)
 
     await callback.message.edit_reply_markup(reply_markup=keyboard)
@@ -667,8 +677,12 @@ async def approval_select_school(
         return
 
     profile = await get_profile_by_id(session, profile_id)
-    if not profile:
-        await callback.answer("❌ Profil topilmadi.", show_alert=True)
+    if not profile or profile.is_approved or profile.rejected_at or profile.removed_at:
+        try:
+            await callback.message.edit_text(_STALE_APPROVAL_MSG)
+        except Exception:
+            pass
+        await callback.answer(_STALE_APPROVAL_MSG, show_alert=True)
         return
 
     user = await session.get(User, profile.user_id)
@@ -678,7 +692,7 @@ async def approval_select_school(
     requested = profile.registered_at or datetime.now(timezone.utc)
     requested_str = requested.strftime("%d.%m.%Y %H:%M")
 
-    set_selected_school(db_user.id, profile_id, school.id)
+    await set_selected_school(db_user.id, profile_id, school.id)
     keyboard = await build_approval_keyboard(session, profile_id, school.id, set())
     groups = await list_groups_by_school(session, school.id)
 
@@ -717,8 +731,12 @@ async def approval_school_page(
         return
 
     profile = await get_profile_by_id(session, profile_id)
-    if not profile:
-        await callback.answer("❌ Profil topilmadi.", show_alert=True)
+    if not profile or profile.is_approved or profile.rejected_at or profile.removed_at:
+        try:
+            await callback.message.edit_text(_STALE_APPROVAL_MSG)
+        except Exception:
+            pass
+        await callback.answer(_STALE_APPROVAL_MSG, show_alert=True)
         return
 
     user = await session.get(User, profile.user_id)
@@ -728,7 +746,7 @@ async def approval_school_page(
     requested = profile.registered_at or datetime.now(timezone.utc)
     requested_str = requested.strftime("%d.%m.%Y %H:%M")
 
-    current_school_id = get_selected_school(db_user.id, profile_id)
+    current_school_id = await get_selected_school(db_user.id, profile_id)
     current_school_name = "Tanlanmagan"
     if current_school_id:
         current_school = await get_school_by_id(session, current_school_id)
@@ -775,22 +793,22 @@ async def approval_confirm(
         return
 
     profile = await get_profile_by_id(session, profile_id)
-    if not profile:
-        await callback.message.edit_text("❌ Ro'yxatdan o'tish profili topilmadi.")
-        await callback.answer()
-        return
-    if profile.is_approved:
-        await callback.answer("ℹ️ Bu o'qituvchi allaqachon tasdiqlangan.", show_alert=True)
+    if not profile or profile.is_approved or profile.rejected_at or profile.removed_at:
+        try:
+            await callback.message.edit_text(_STALE_APPROVAL_MSG)
+        except Exception:
+            pass
+        await callback.answer(_STALE_APPROVAL_MSG, show_alert=True)
         return
 
-    school_id = get_selected_school(db_user.id, profile_id)
+    school_id = await get_selected_school(db_user.id, profile_id)
     if not school_id:
         await callback.answer("Avval maktabni tanlang.", show_alert=True)
         return
     school = await get_school_by_id(session, school_id)
     school_name = school.name if school else f"{school_id}-maktab"
 
-    selected_ids = get_selected_group_ids(db_user.id, profile_id)
+    selected_ids = await get_selected_group_ids(db_user.id, profile_id)
     if not selected_ids:
         await callback.answer("Kamida bitta guruhni tanlang.", show_alert=True)
         return
@@ -803,7 +821,7 @@ async def approval_confirm(
     assigned_names = [g.name for g in selected_groups]
 
     await approve_profile(session, profile, db_user.id, assigned_names, school_id=school_id)
-    clear_selections_for_profile(profile_id)
+    await clear_selections_for_profile(profile_id)
 
     user = await session.get(User, profile.user_id)
     if user:
@@ -866,7 +884,7 @@ async def pending_approve_start(
         await callback.answer("ℹ️ Bu so'rov endi faol emas.", show_alert=True)
         return
 
-    clear_selections_for_profile(profile_id)
+    await clear_selections_for_profile(profile_id)
 
     user = await session.get(User, profile.user_id)
     username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
@@ -891,7 +909,7 @@ async def pending_approve_start(
     )
 
     if school:
-        set_selected_school(db_user.id, profile_id, school.id)
+        await set_selected_school(db_user.id, profile_id, school.id)
         keyboard = await build_approval_keyboard(session, profile.id, school.id, set())
         await callback.message.edit_text(
             f"{message_text}\n\n📚 {school.name} uchun guruhlarni tanlang:",
@@ -913,6 +931,7 @@ async def pending_approve_start(
 async def approval_reject_start(
         callback: CallbackQuery,
         state: FSMContext,
+        session: AsyncSession,
         is_superadmin: bool = False,
 ) -> None:
     if not is_superadmin:
@@ -923,6 +942,15 @@ async def approval_reject_start(
         profile_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    profile = await get_profile_by_id(session, profile_id)
+    if not profile or profile.is_approved or profile.rejected_at or profile.removed_at:
+        try:
+            await callback.message.edit_text(_STALE_APPROVAL_MSG)
+        except Exception:
+            pass
+        await callback.answer(_STALE_APPROVAL_MSG, show_alert=True)
         return
 
     await state.set_state(RejectTeacherStates.waiting_reason)
@@ -959,7 +987,7 @@ async def _perform_reject(
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
 
     await reject_profile(session, profile)
-    clear_selections_for_profile(profile.id)
+    await clear_selections_for_profile(profile.id)
 
     if user:
         reason_text = f"Sabab: {reason}" if reason else "Sabab: ko'rsatilmagan"
@@ -1929,7 +1957,7 @@ async def add_teacher_manual_waiting_user(
         session.add(profile)
         await session.commit()
         await session.refresh(profile)
-    clear_selections_for_profile(profile.id)
+    await clear_selections_for_profile(profile.id)
 
     schools = await list_schools(session)
     if not schools:

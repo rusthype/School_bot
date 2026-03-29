@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import time
-from collections import defaultdict
+import json
 from datetime import datetime, timezone
 
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,66 +15,79 @@ from school_bot.bot.services.pagination import SchoolPagination
 from school_bot.database.models import Profile, User, UserRole, School
 
 
-_APPROVAL_SELECTIONS: dict[tuple[int, int], set[int]] = defaultdict(set)
-_APPROVAL_SCHOOLS: dict[tuple[int, int], int] = {}
-_APPROVAL_TIMESTAMPS: dict[tuple[int, int], float] = {}
-_APPROVAL_TTL = 600.0  # 10 minutes
-
-
-def _cleanup_expired_approval_state() -> None:
-    """Remove approval entries older than _APPROVAL_TTL seconds."""
-    now = time.monotonic()
-    expired = [key for key, ts in _APPROVAL_TIMESTAMPS.items() if now - ts > _APPROVAL_TTL]
-    for key in expired:
-        _APPROVAL_SELECTIONS.pop(key, None)
-        _APPROVAL_SCHOOLS.pop(key, None)
-        _APPROVAL_TIMESTAMPS.pop(key, None)
-
-
-def _touch_approval_key(key: tuple[int, int]) -> None:
-    _APPROVAL_TIMESTAMPS[key] = time.monotonic()
 logger = get_logger(__name__)
 
-
-def get_selected_group_ids(admin_id: int, profile_id: int) -> set[int]:
-    _cleanup_expired_approval_state()
-    return set(_APPROVAL_SELECTIONS.get((admin_id, profile_id), set()))
+_APPROVAL_TTL = 86400  # 24 hours (was 10 minutes in-memory)
+_redis: Redis | None = None
 
 
-def toggle_selected_group(admin_id: int, profile_id: int, group_id: int) -> set[int]:
-    _cleanup_expired_approval_state()
-    key = (admin_id, profile_id)
-    selected = _APPROVAL_SELECTIONS.get(key, set())
+async def get_redis() -> Redis:
+    """Return a shared Redis client for approval state, lazily initialised."""
+    global _redis
+    if _redis is None:
+        settings = Settings()
+        _redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    return _redis
+
+
+def _sel_key(admin_id: int, profile_id: int) -> str:
+    return f"approval:selections:{admin_id}:{profile_id}"
+
+
+def _school_key(admin_id: int, profile_id: int) -> str:
+    return f"approval:school:{admin_id}:{profile_id}"
+
+
+# --------------- selections ---------------
+
+async def get_selected_group_ids(admin_id: int, profile_id: int) -> set[int]:
+    r = await get_redis()
+    raw = await r.get(_sel_key(admin_id, profile_id))
+    if raw is None:
+        return set()
+    return set(json.loads(raw))
+
+
+async def toggle_selected_group(admin_id: int, profile_id: int, group_id: int) -> set[int]:
+    key = _sel_key(admin_id, profile_id)
+    r = await get_redis()
+    raw = await r.get(key)
+    selected: set[int] = set(json.loads(raw)) if raw else set()
     if group_id in selected:
         selected.discard(group_id)
     else:
         selected.add(group_id)
-    _APPROVAL_SELECTIONS[key] = selected
-    _touch_approval_key(key)
+    await r.set(key, json.dumps(list(selected)), ex=_APPROVAL_TTL)
     return set(selected)
 
 
-def clear_selections_for_profile(profile_id: int) -> None:
-    keys = [key for key in _APPROVAL_SELECTIONS.keys() if key[1] == profile_id]
-    for key in keys:
-        _APPROVAL_SELECTIONS.pop(key, None)
-        _APPROVAL_TIMESTAMPS.pop(key, None)
-    school_keys = [key for key in _APPROVAL_SCHOOLS.keys() if key[1] == profile_id]
-    for key in school_keys:
-        _APPROVAL_SCHOOLS.pop(key, None)
-        _APPROVAL_TIMESTAMPS.pop(key, None)
+async def clear_selections_for_profile(profile_id: int) -> None:
+    """Remove all approval state keys for a given profile (any admin)."""
+    r = await get_redis()
+    pattern = f"approval:*:*:{profile_id}"
+    cursor: int | str = 0
+    while True:
+        cursor, keys = await r.scan(cursor=cursor, match=pattern, count=100)
+        if keys:
+            await r.delete(*keys)
+        if cursor == 0:
+            break
 
 
-def set_selected_school(admin_id: int, profile_id: int, school_id: int) -> None:
-    key = (admin_id, profile_id)
-    _APPROVAL_SCHOOLS[key] = school_id
-    _touch_approval_key(key)
+# --------------- school selection ---------------
+
+async def set_selected_school(admin_id: int, profile_id: int, school_id: int) -> None:
+    r = await get_redis()
+    await r.set(_school_key(admin_id, profile_id), str(school_id), ex=_APPROVAL_TTL)
 
 
-def get_selected_school(admin_id: int, profile_id: int) -> int | None:
-    _cleanup_expired_approval_state()
-    return _APPROVAL_SCHOOLS.get((admin_id, profile_id))
+async def get_selected_school(admin_id: int, profile_id: int) -> int | None:
+    r = await get_redis()
+    raw = await r.get(_school_key(admin_id, profile_id))
+    return int(raw) if raw else None
 
+
+# --------------- keyboard builders (unchanged logic) ---------------
 
 def build_school_keyboard(
     profile_id: int,
@@ -192,7 +205,7 @@ async def notify_superadmins_new_registration(
             if profile.school_id:
                 school = await session.get(School, profile.school_id)
                 if school:
-                    set_selected_school(superadmin.id, profile.id, school.id)
+                    await set_selected_school(superadmin.id, profile.id, school.id)
                     keyboard = await build_approval_keyboard(session, profile.id, school.id, set())
                     await bot.send_message(
                         chat_id=superadmin.telegram_id,
