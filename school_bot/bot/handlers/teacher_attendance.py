@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,7 +56,7 @@ async def teacher_check_out_start(
 
 
 @router.message(
-    (Command("cancel") | (F.text == "❌ Bekor qilish")),
+    or_f(Command("cancel"), F.text == "❌ Bekor qilish"),
     StateFilter(
         TeacherAttendanceStates.waiting_for_check_in_location,
         TeacherAttendanceStates.waiting_for_check_out_location,
