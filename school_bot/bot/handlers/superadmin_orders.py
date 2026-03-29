@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -217,7 +217,7 @@ async def admin_status_comment(
         await state.clear()
         return
     order.status = new_status
-    order.updated_at = datetime.utcnow()
+    order.updated_at = datetime.now(timezone.utc)
     order.updated_by = db_user.id
     session.add(
         OrderStatusHistory(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, StateFilter, BaseFilter
@@ -61,7 +61,6 @@ from school_bot.bot.handlers.common import (
     get_skip_cancel_keyboard,
     show_groups_menu,
 )
-from school_bot.bot.utils.parser import parse_telegram_input
 
 MAX_TG_MESSAGE = 4000
 
@@ -422,7 +421,7 @@ async def cmd_pending_approvals(
         user = await session.get(User, profile.user_id)
         username = f"@{user.username}" if user and user.username else "(username yo'q)"
         full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
-        requested = profile.registered_at or datetime.utcnow()
+        requested = profile.registered_at or datetime.now(timezone.utc)
         requested_str = requested.strftime("%d.%m.%Y %H:%M")
 
         school_name = "Tanlanmagan"
@@ -676,6 +675,9 @@ async def approval_select_school(
     username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
 
+    requested = profile.registered_at or datetime.now(timezone.utc)
+    requested_str = requested.strftime("%d.%m.%Y %H:%M")
+
     set_selected_school(db_user.id, profile_id, school.id)
     keyboard = await build_approval_keyboard(session, profile_id, school.id, set())
     groups = await list_groups_by_school(session, school.id)
@@ -684,7 +686,7 @@ async def approval_select_school(
         f"👤 {full_name}\n"
         f"🔹 {username}\n"
         f"📱 {profile.phone}\n"
-        f"🏫 Maktab: {school_name}\n"
+        f"🏫 Maktab: {school.name}\n"
         f"📅 So'rov: {requested_str}"
     )
 
@@ -723,6 +725,16 @@ async def approval_school_page(
     username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
 
+    requested = profile.registered_at or datetime.now(timezone.utc)
+    requested_str = requested.strftime("%d.%m.%Y %H:%M")
+
+    current_school_id = get_selected_school(db_user.id, profile_id)
+    current_school_name = "Tanlanmagan"
+    if current_school_id:
+        current_school = await get_school_by_id(session, current_school_id)
+        if current_school:
+            current_school_name = current_school.name
+
     schools = await list_schools(session)
     total_pages = max(1, (len(schools) + 9) // 10)
     keyboard = build_school_keyboard(profile_id, schools, page=page, per_page=10)
@@ -731,7 +743,7 @@ async def approval_school_page(
         f"👤 {full_name}\n"
         f"🔹 {username}\n"
         f"📱 {profile.phone}\n"
-        f"🏫 Maktab: {school_name}\n"
+        f"🏫 Maktab: {current_school_name}\n"
         f"📅 So'rov: {requested_str}"
     )
 
@@ -859,7 +871,7 @@ async def pending_approve_start(
     user = await session.get(User, profile.user_id)
     username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
-    requested = profile.registered_at or datetime.utcnow()
+    requested = profile.registered_at or datetime.now(timezone.utc)
     requested_str = requested.strftime("%d.%m.%Y %H:%M")
 
     school_name = "Tanlanmagan"
@@ -1007,16 +1019,6 @@ async def cmd_add_teacher_start(
 
     await message.answer(
         "ℹ️ Bu buyruq eskirgan. O'qituvchilar /start orqali ro'yxatdan o'tib, tasdiqni kutishlari kerak."
-    )
-    return
-
-    await state.set_state(AddTeacherStates.waiting_for_input)
-    current_state = await state.get_state()
-
-    await message.answer(
-        "👤 O'qituvchi qilmoqchi bo'lgan foydalanuvchining Telegram ID sini yoki foydalanuvchi nomini yuboring:\n"
-        "Masalan: 123456789 yoki @username yoki username\n\n"
-        "❌ Bekor qilish uchun /cancel bosing"
     )
 
 

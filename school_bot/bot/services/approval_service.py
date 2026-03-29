@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -142,7 +142,7 @@ async def notify_superadmins_new_registration(
     username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
 
-    requested = profile.registered_at or datetime.utcnow()
+    requested = profile.registered_at or datetime.now(timezone.utc)
     requested_str = requested.strftime("%d.%m.%Y %H:%M")
     user_id_display = user.telegram_id if user else "Noma'lum"
     school_name = None

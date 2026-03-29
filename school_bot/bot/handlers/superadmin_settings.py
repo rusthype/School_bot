@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -16,7 +16,7 @@ from school_bot.database.models import BotSettings, User, UserRole
 
 router = Router(name="superadmin_settings")
 
-BOT_STARTED_AT = datetime.utcnow()
+BOT_STARTED_AT = datetime.now(timezone.utc)
 
 
 class BotSettingsStates(StatesGroup):
@@ -220,7 +220,7 @@ async def settings_info(callback: CallbackQuery, session: AsyncSession, is_super
     settings = await get_or_create_settings(session)
     bot = await callback.bot.get_me()
     total_users = await session.scalar(select(func.count()).select_from(User)) or 0
-    uptime = datetime.utcnow() - BOT_STARTED_AT
+    uptime = datetime.now(timezone.utc) - BOT_STARTED_AT
     uptime_str = f"{uptime.days} kun {uptime.seconds // 3600} soat"
 
     bot_username = bot.username or "Noma'lum"

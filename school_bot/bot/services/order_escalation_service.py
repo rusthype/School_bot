@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from html import escape
 
 from aiogram import Bot
@@ -126,7 +126,7 @@ async def start_overdue_order_watch(
 ) -> None:
     while True:
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             default_cutoff = now - timedelta(days=default_deadline_days)
             async with session_factory() as session:
                 result = await session.execute(

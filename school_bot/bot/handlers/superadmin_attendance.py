@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, KeyboardButton, Message, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -216,8 +216,7 @@ async def attendance_menu(
 
 
 @router.message(
-    Command("cancel"),
-    F.text == "❌ Bekor qilish",
+    or_f(Command("cancel"), F.text == "❌ Bekor qilish"),
     StateFilter(
         SuperadminAttendanceStates.waiting_for_school_location,
         SuperadminAttendanceStates.waiting_for_radius,

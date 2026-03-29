@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,7 @@ async def create_book_order(
     priority: str = "normal",
 ) -> BookOrder:
     priority_days = {"normal": 7, "urgent": 3, "express": 2}
-    default_deadline = datetime.utcnow() + timedelta(days=priority_days.get(priority, 7))
+    default_deadline = datetime.now(timezone.utc) + timedelta(days=priority_days.get(priority, 7))
     order = BookOrder(
         teacher_id=teacher_id,
         status="pending",
@@ -28,7 +28,7 @@ async def create_book_order(
         priority=priority,
         delivery_deadline=default_deadline,
         escalated=False,
-        updated_at=datetime.utcnow(),
+        updated_at=datetime.now(timezone.utc),
         updated_by=teacher_id,
     )
     session.add(order)
@@ -116,9 +116,9 @@ async def confirm_order(
 ) -> BookOrder:
     old_status = order.status
     order.status = "confirmed"
-    order.confirmed_at = datetime.utcnow()
+    order.confirmed_at = datetime.now(timezone.utc)
     order.librarian_id = librarian_id
-    order.updated_at = datetime.utcnow()
+    order.updated_at = datetime.now(timezone.utc)
     order.updated_by = librarian_id
     session.add(
         OrderStatusHistory(
@@ -142,7 +142,7 @@ async def mark_processing(
     old_status = order.status
     order.status = "processing"
     order.librarian_id = librarian_id
-    order.updated_at = datetime.utcnow()
+    order.updated_at = datetime.now(timezone.utc)
     order.updated_by = librarian_id
     session.add(
         OrderStatusHistory(
@@ -166,7 +166,7 @@ async def reject_order(
     old_status = order.status
     order.status = "rejected"
     order.librarian_id = librarian_id
-    order.updated_at = datetime.utcnow()
+    order.updated_at = datetime.now(timezone.utc)
     order.updated_by = librarian_id
     session.add(
         OrderStatusHistory(
@@ -189,10 +189,10 @@ async def mark_delivered(
 ) -> BookOrder:
     old_status = order.status
     order.status = "delivered"
-    order.delivered_at = datetime.utcnow()
+    order.delivered_at = datetime.now(timezone.utc)
     order.delivered_by = librarian_id
     order.librarian_id = librarian_id
-    order.updated_at = datetime.utcnow()
+    order.updated_at = datetime.now(timezone.utc)
     order.updated_by = librarian_id
     session.add(
         OrderStatusHistory(

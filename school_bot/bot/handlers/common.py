@@ -634,6 +634,7 @@ async def registration_confirm(
     last_name = data.get("last_name")
     phone = data.get("phone")
     school_id = data.get("school_id")
+    reg_type = data.get("reg_type", "teacher")
     if not (first_name and phone):
         await callback.answer("❌ Ma'lumotlar to'liq emas", show_alert=True)
         return
@@ -645,7 +646,7 @@ async def registration_confirm(
         last_name=last_name,
         phone=phone,
         school_id=school_id,
-        profile_type="teacher",
+        profile_type=reg_type,
     )
     await notify_superadmins_new_registration(session, callback.bot, profile)
 
@@ -840,19 +841,6 @@ async def button_start(
         is_teacher=is_teacher,
         is_librarian=is_librarian,
         notice=None,
-    )
-    return
-    await cmd_start(
-        message,
-        state,
-        session,
-        db_user,
-        profile,
-        is_superadmin,
-        is_teacher,
-        is_librarian,
-        is_group_admin,
-        is_student,
     )
 @router.message(F.text == "❓ Yordam")
 async def button_help(

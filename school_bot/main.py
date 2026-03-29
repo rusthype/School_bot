@@ -116,12 +116,15 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-    asyncio.create_task(set_bot_commands(bot, settings.superadmin_ids))
-    asyncio.create_task(start_overdue_order_watch(bot=bot, session_factory=session_factory))
-    asyncio.create_task(start_log_cleanup_watch(settings))
-
     storage = RedisStorage.from_url(settings.redis_url)
     dp = Dispatcher(storage=storage)
+
+    async def on_startup(bot: Bot) -> None:
+        asyncio.create_task(set_bot_commands(bot, settings.superadmin_ids))
+        asyncio.create_task(start_overdue_order_watch(bot=bot, session_factory=session_factory))
+        asyncio.create_task(start_log_cleanup_watch(settings))
+
+    dp.startup.register(on_startup)
 
     dp.update.middleware(GroupAdminGuardMiddleware())
     dp.update.middleware(DbSessionMiddleware(session_factory=session_factory))
