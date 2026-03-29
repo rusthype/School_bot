@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +38,7 @@ async def upsert_profile(
         profile.phone = phone
         profile.school_id = school_id
         profile.profile_type = profile_type
-        profile.registered_at = datetime.utcnow()
+        profile.registered_at = datetime.now(timezone.utc)
         profile.is_approved = False
         profile.approved_by = None
         profile.approved_at = None
@@ -55,7 +55,7 @@ async def upsert_profile(
         phone=phone,
         school_id=school_id,
         profile_type=profile_type,
-        registered_at=datetime.utcnow(),
+        registered_at=datetime.now(timezone.utc),
         is_approved=False,
         assigned_groups=[],
     )
@@ -83,10 +83,10 @@ async def upsert_student_profile(
         profile.school_id = school_id
         profile.profile_type = "student"
         profile.assigned_groups = [class_name] if class_name else []
-        profile.registered_at = datetime.utcnow()
+        profile.registered_at = datetime.now(timezone.utc)
         profile.is_approved = True
         profile.approved_by = None
-        profile.approved_at = datetime.utcnow()
+        profile.approved_at = datetime.now(timezone.utc)
         profile.rejected_at = None
         profile.removed_at = None
         await session.commit()
@@ -101,10 +101,10 @@ async def upsert_student_profile(
         school_id=school_id,
         profile_type="student",
         assigned_groups=[class_name] if class_name else [],
-        registered_at=datetime.utcnow(),
+        registered_at=datetime.now(timezone.utc),
         is_approved=True,
         approved_by=None,
-        approved_at=datetime.utcnow(),
+        approved_at=datetime.now(timezone.utc),
     )
     session.add(profile)
     await session.commit()
@@ -123,7 +123,7 @@ async def approve_profile(
     profile.assigned_groups = assigned_groups
     profile.profile_type = profile.profile_type or "teacher"
     profile.approved_by = approved_by_user_id
-    profile.approved_at = datetime.utcnow()
+    profile.approved_at = datetime.now(timezone.utc)
     profile.rejected_at = None
     profile.removed_at = None
     if school_id is not None:
@@ -148,7 +148,7 @@ async def revoke_teacher(session: AsyncSession, user_id: int) -> bool:
         profile.assigned_groups = []
         profile.approved_by = None
         profile.approved_at = None
-        profile.removed_at = datetime.utcnow()
+        profile.removed_at = datetime.now(timezone.utc)
         changed = True
 
     if user and user.role == UserRole.teacher:
@@ -170,7 +170,7 @@ async def reject_profile(session: AsyncSession, profile: Profile) -> None:
     profile.assigned_groups = []
     profile.approved_by = None
     profile.approved_at = None
-    profile.rejected_at = datetime.utcnow()
+    profile.rejected_at = datetime.now(timezone.utc)
     profile.removed_at = None
 
     await session.commit()

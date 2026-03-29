@@ -43,3 +43,53 @@ ALTER TABLE groups ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active';
 UPDATE groups SET status = 'active' WHERE status IS NULL;
 """))
 
+            await conn.execute(text("""
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+"""))
+            await conn.execute(text("""
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+"""))
+            await conn.execute(text("""
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS radius_m INTEGER DEFAULT 150;
+"""))
+            await conn.execute(text("""
+UPDATE schools SET radius_m = 150 WHERE radius_m IS NULL;
+"""))
+
+            await conn.execute(text("""
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'attendance_action') THEN
+        CREATE TYPE attendance_action AS ENUM ('check_in', 'check_out');
+    END IF;
+END $$;
+"""))
+
+            await conn.execute(text("""
+CREATE TABLE IF NOT EXISTS teacher_attendance (
+    id SERIAL PRIMARY KEY,
+    teacher_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    action attendance_action NOT NULL,
+    teacher_lat DOUBLE PRECISION NOT NULL,
+    teacher_lon DOUBLE PRECISION NOT NULL,
+    school_lat DOUBLE PRECISION NOT NULL,
+    school_lon DOUBLE PRECISION NOT NULL,
+    distance_m INTEGER NOT NULL,
+    is_inside BOOLEAN NOT NULL DEFAULT FALSE,
+    attendance_date DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""))
+            await conn.execute(text("""
+CREATE UNIQUE INDEX IF NOT EXISTS uq_teacher_attendance_daily_action
+ON teacher_attendance (teacher_id, attendance_date, action);
+"""))
+            await conn.execute(text("""
+CREATE INDEX IF NOT EXISTS ix_teacher_attendance_date
+ON teacher_attendance (attendance_date);
+"""))
+            await conn.execute(text("""
+CREATE INDEX IF NOT EXISTS ix_teacher_attendance_school_date
+ON teacher_attendance (school_id, attendance_date);
+"""))

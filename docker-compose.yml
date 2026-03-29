@@ -1,4 +1,7 @@
 services:
+  redis:
+    image: redis:7-alpine
+    restart: always
   postgres:
     image: postgres:15
     restart: unless-stopped
@@ -24,6 +27,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - ./logs:/app/logs
       - ./photos:/app/photos

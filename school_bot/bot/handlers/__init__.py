@@ -14,6 +14,8 @@ from . import (
     superadmin_dashboard,
     logs,
     superadmin_settings,
+    teacher_attendance,
+    superadmin_attendance,
 )
 
 __all__ = [
@@ -32,4 +34,6 @@ __all__ = [
     "superadmin_dashboard",
     "logs",
     "superadmin_settings",
+    "teacher_attendance",
+    "superadmin_attendance",
 ]

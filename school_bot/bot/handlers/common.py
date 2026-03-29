@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
 from sqlalchemy.engine.url import make_url
 from datetime import datetime
-from school_bot.database.models import User, UserRole, Task, School
+from school_bot.database.models import User, UserRole, Task, School, PollVote
 from school_bot.bot.states.new_task import NewTaskStates
 from school_bot.bot.states.registration import RegistrationStates
 from school_bot.bot.states.book_states import CategoryAddStates
@@ -102,6 +102,10 @@ def get_teacher_keyboard() -> ReplyKeyboardMarkup:
         KeyboardButton(text="📊 Ovozlar"),
     )
     builder.row(
+        KeyboardButton(text="📍 Keldim"),
+        KeyboardButton(text="🚪 Ketdim"),
+    )
+    builder.row(
         KeyboardButton(text="📚 Kitoblar"),
         KeyboardButton(text="👥 O'quvchilar"),
     )
@@ -125,6 +129,9 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
     builder.row(
         KeyboardButton(text="📚 GURUHLAR"),
         KeyboardButton(text="🏫 Maktablar"),
+    )
+    builder.row(
+        KeyboardButton(text="🕒 Davomat"),
     )
     builder.row(
         KeyboardButton(text="⚙️ Bot sozlamalari"),
@@ -727,6 +734,8 @@ async def cmd_start(
             "",
             "👨‍🏫 **O'qituvchi buyruqlari:**",
             "📝 Yangi topshiriq",
+            "📍 Keldim",
+            "🚪 Ketdim",
             "📚 Kitob buyurtma qilish",
             "📦 Mening buyurtmalarim",
         ]
@@ -746,6 +755,7 @@ async def cmd_start(
             "👥 FOYDALANUVCHILAR",
             "📊 STATISTIKA",
             "📚 GURUHLAR",
+            "🕒 DAVOMAT",
         ]
     lines += [
         "",
@@ -895,15 +905,131 @@ async def books_menu(
         lines.append(f"• {category.name}")
     await message.answer("\n".join(lines), reply_markup=get_student_keyboard())
 @router.message(F.text == "📘 Topshiriqlar")
-async def student_tasks_menu(message: Message, is_student: bool = False) -> None:
+async def student_tasks_menu(
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    profile,
+    is_student: bool = False,
+) -> None:
     if not is_student:
         return
-    await message.answer("📘 Topshiriqlar bo'limi tez orada ishga tushadi.", reply_markup=get_student_keyboard())
+
+    # Get the student's assigned groups (list of group names)
+    assigned_groups: list[str] = (profile.assigned_groups or []) if profile else []
+    if not assigned_groups:
+        await message.answer(
+            "Sizning guruhingiz uchun topshiriqlar yo'q.",
+            reply_markup=get_student_keyboard(),
+        )
+        return
+
+    # Find teacher profiles that have any overlap with student's groups
+    teacher_profiles_stmt = select(Profile).where(
+        Profile.profile_type == "teacher",
+        Profile.is_approved == True,
+    )
+    teacher_profiles = (await session.execute(teacher_profiles_stmt)).scalars().all()
+
+    # Filter to teachers whose assigned_groups overlap with student's groups
+    student_groups_set = set(assigned_groups)
+    matching_teacher_user_ids = [
+        tp.user_id
+        for tp in teacher_profiles
+        if student_groups_set.intersection(set(tp.assigned_groups or []))
+    ]
+
+    if not matching_teacher_user_ids:
+        await message.answer(
+            "Sizning guruhingiz uchun topshiriqlar yo'q.",
+            reply_markup=get_student_keyboard(),
+        )
+        return
+
+    tasks_stmt = (
+        select(Task)
+        .where(Task.teacher_id.in_(matching_teacher_user_ids))
+        .order_by(Task.created_at.desc())
+        .limit(10)
+    )
+    tasks = (await session.execute(tasks_stmt)).scalars().all()
+
+    if not tasks:
+        await message.answer(
+            "Sizning guruhingiz uchun topshiriqlar yo'q.",
+            reply_markup=get_student_keyboard(),
+        )
+        return
+
+    lines: list[str] = ["📘 <b>Topshiriqlar:</b>", ""]
+    for task in tasks:
+        desc_preview = (task.description or "")[:80]
+        if len(task.description or "") > 80:
+            desc_preview += "..."
+        date_str = task.created_at.strftime("%d.%m.%Y")
+        import html as _html
+        lines.append(f"#{task.id} — <b>{_html.escape(task.topic)}</b>")
+        lines.append(f"📝 {_html.escape(desc_preview)}")
+        lines.append(f"🕒 {date_str}")
+        lines.append("")
+
+    from school_bot.bot.utils.telegram import send_chunked_message
+    await send_chunked_message(
+        message,
+        "\n".join(lines).strip(),
+        reply_markup=get_student_keyboard(),
+        parse_mode="HTML",
+    )
+
+
 @router.message(F.text == "📊 Baholar")
-async def student_grades_menu(message: Message, is_student: bool = False) -> None:
+async def student_grades_menu(
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    is_student: bool = False,
+) -> None:
     if not is_student:
         return
-    await message.answer("📊 Baholar bo'limi tez orada ishga tushadi.", reply_markup=get_student_keyboard())
+
+    votes_stmt = (
+        select(PollVote)
+        .where(PollVote.user_id == db_user.id)
+        .order_by(PollVote.voted_at.desc())
+        .limit(30)
+    )
+    votes = (await session.execute(votes_stmt)).scalars().all()
+
+    if not votes:
+        await message.answer(
+            "Siz hali hech qanday topshiriqqa javob bermadingiz.",
+            reply_markup=get_student_keyboard(),
+        )
+        return
+
+    # Fetch task topics for all task IDs referenced in votes
+    task_ids = list({v.task_id for v in votes if v.task_id})
+    tasks_map: dict[int, Task] = {}
+    if task_ids:
+        tasks_stmt = select(Task).where(Task.id.in_(task_ids))
+        tasks_map = {t.id: t for t in (await session.execute(tasks_stmt)).scalars().all()}
+
+    import html as _html
+    lines: list[str] = ["📊 <b>Baholar:</b>", ""]
+    for vote in votes:
+        task = tasks_map.get(vote.task_id) if vote.task_id else None
+        topic = _html.escape(task.topic) if task else "Noma'lum topshiriq"
+        option_text = _html.escape(vote.option_text or "")
+        date_str = vote.voted_at.strftime("%d.%m.%Y") if vote.voted_at else "—"
+        lines.append(f"📋 {topic} — {option_text} ({date_str})")
+
+    from school_bot.bot.utils.telegram import send_chunked_message
+    await send_chunked_message(
+        message,
+        "\n".join(lines),
+        reply_markup=get_student_keyboard(),
+        parse_mode="HTML",
+    )
 @router.message(F.text == "📝 Yangi topshiriq")
 async def button_new_task(
         message: Message,
@@ -981,21 +1107,6 @@ async def button_all_polls(
         return
     from school_bot.bot.handlers.admin import cmd_all_polls
     await cmd_all_polls(message, session, state, is_superadmin)
-@router.message(F.text == "📋 Joriy topshiriqlar")
-async def teacher_current_tasks(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
-    if not (is_teacher or is_superadmin):
-        return
-    await message.answer("📋 Joriy topshiriqlar bo'limi tez orada ishga tushadi.")
-@router.message(F.text == "📊 Baholar jurnali")
-async def teacher_gradebook(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
-    if not (is_teacher or is_superadmin):
-        return
-    await message.answer("📊 Baholar jurnali bo'limi tez orada ishga tushadi.")
-@router.message(F.text == "📈 O'rtacha ball")
-async def teacher_average_scores(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
-    if not (is_teacher or is_superadmin):
-        return
-    await message.answer("📈 O'rtacha ball hisoboti tez orada ishga tushadi.")
 @router.message(F.text == "📤 Eksport")
 async def teacher_export(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
     if not (is_teacher or is_superadmin):

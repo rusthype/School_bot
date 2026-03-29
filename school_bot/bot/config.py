@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     teacher_ids_raw: str = Field(default="", alias="TEACHER_IDS")
     admin_group_id: int | None = Field(default=None, alias="ADMIN_GROUP_ID")
 
+    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+
     log_max_size_mb: int = Field(default=10, alias="LOG_MAX_SIZE_MB")
     log_cleanup_days: int = Field(default=30, alias="LOG_CLEANUP_DAYS")
 

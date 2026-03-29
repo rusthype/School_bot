@@ -10,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, FSInputFile, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, PollAnswer
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.orm import selectinload
 
 from school_bot.bot.services.poll_service import send_task_poll
@@ -18,7 +18,7 @@ from school_bot.bot.services.group_service import list_groups, get_group_by_id, 
 from school_bot.bot.services.task_service import create_task
 from school_bot.bot.states.new_task import NewTaskStates
 from school_bot.database.models import Task, PollVote
-from school_bot.bot.handlers.common import get_main_keyboard
+from school_bot.bot.handlers.common import get_main_keyboard, get_teacher_votes_keyboard
 from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.services.user_service import get_or_create_user
 
@@ -509,7 +509,7 @@ async def cmd_poll_voters(
     is_teacher: bool = False,
     is_superadmin: bool = False,
 ) -> None:
-    if not is_teacher or is_superadmin:
+    if not (is_teacher or is_superadmin):
         await message.answer("⛔ Bu komanda faqat o'qituvchilar uchun.")
         return
 
@@ -646,3 +646,167 @@ async def show_poll_voters(
 
     text = format_poll_voters(task)
     await message.answer(text)
+
+
+# ============== TEACHER VOTES SUBMENU HANDLERS ==============
+
+@router.message(F.text == "📋 Joriy topshiriqlar")
+async def teacher_current_tasks_handler(
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    if not (is_teacher or is_superadmin):
+        return
+
+    stmt = (
+        select(Task)
+        .where(Task.teacher_id == db_user.id)
+        .order_by(Task.created_at.desc())
+        .limit(20)
+    )
+    tasks = (await session.execute(stmt)).scalars().all()
+
+    if not tasks:
+        await message.answer(
+            "Hozircha topshiriqlar yo'q.",
+            reply_markup=get_teacher_votes_keyboard(),
+        )
+        return
+
+    lines: list[str] = ["📋 <b>Joriy topshiriqlar:</b>", ""]
+    for task in tasks:
+        desc_preview = (task.description or "")[:80]
+        if len(task.description or "") > 80:
+            desc_preview += "..."
+        date_str = task.created_at.strftime("%d.%m.%Y")
+        lines.append(f"#{task.id} — <b>{html.escape(task.topic)}</b>")
+        lines.append(f"📝 {html.escape(desc_preview)}")
+        lines.append(f"🕒 {date_str}")
+        lines.append("")
+
+    from school_bot.bot.utils.telegram import send_chunked_message
+    await send_chunked_message(
+        message,
+        "\n".join(lines).strip(),
+        reply_markup=get_teacher_votes_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.message(F.text == "📊 Baholar jurnali")
+async def teacher_gradebook_handler(
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    if not (is_teacher or is_superadmin):
+        return
+
+    stmt = (
+        select(Task)
+        .where(Task.teacher_id == db_user.id)
+        .options(selectinload(Task.poll_votes))
+        .order_by(Task.created_at.desc())
+        .limit(20)
+    )
+    tasks = (await session.execute(stmt)).scalars().all()
+
+    if not tasks:
+        await message.answer(
+            "Baholar jurnali bo'sh.",
+            reply_markup=get_teacher_votes_keyboard(),
+        )
+        return
+
+    lines: list[str] = ["📊 <b>Baholar jurnali:</b>", ""]
+    for task in tasks:
+        votes_by_option: dict[int, int] = {}
+        for vote in task.poll_votes:
+            votes_by_option[vote.option_id] = votes_by_option.get(vote.option_id, 0) + 1
+
+        lines.append(f"📋 <b>{html.escape(task.topic)}</b>")
+        if votes_by_option:
+            for option_id in sorted(votes_by_option.keys()):
+                option_text = (
+                    POLL_OPTIONS[option_id]
+                    if option_id < len(POLL_OPTIONS)
+                    else f"Variant {option_id + 1}"
+                )
+                count = votes_by_option[option_id]
+                lines.append(f"  {html.escape(option_text)}: {count} ta")
+        else:
+            lines.append("  — ovozlar yo'q")
+        lines.append("")
+
+    from school_bot.bot.utils.telegram import send_chunked_message
+    await send_chunked_message(
+        message,
+        "\n".join(lines).strip(),
+        reply_markup=get_teacher_votes_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.message(F.text == "📈 O'rtacha ball")
+async def teacher_average_scores_handler(
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    if not (is_teacher or is_superadmin):
+        return
+
+    # Fetch all tasks for this teacher to get their IDs
+    task_stmt = select(Task.id).where(Task.teacher_id == db_user.id)
+    task_ids = (await session.execute(task_stmt)).scalars().all()
+
+    if not task_ids:
+        await message.answer(
+            "Hali ovozlar yo'q.",
+            reply_markup=get_teacher_votes_keyboard(),
+        )
+        return
+
+    # Count votes per user across all tasks by this teacher
+    from school_bot.database.models import User as UserModel
+    vote_count_stmt = (
+        select(PollVote.user_id, func.count(PollVote.id).label("vote_count"))
+        .where(PollVote.task_id.in_(task_ids))
+        .group_by(PollVote.user_id)
+        .order_by(func.count(PollVote.id).desc())
+        .limit(20)
+    )
+    vote_rows = (await session.execute(vote_count_stmt)).all()
+
+    if not vote_rows:
+        await message.answer(
+            "Hali ovozlar yo'q.",
+            reply_markup=get_teacher_votes_keyboard(),
+        )
+        return
+
+    # Fetch user names
+    user_ids = [row.user_id for row in vote_rows]
+    users_stmt = select(UserModel).where(UserModel.id.in_(user_ids))
+    users = {u.id: u for u in (await session.execute(users_stmt)).scalars().all()}
+
+    lines: list[str] = ["📈 <b>Faol ishtirokchilar:</b>", ""]
+    for rank, row in enumerate(vote_rows, start=1):
+        user = users.get(row.user_id)
+        name = (user.full_name or f"Foydalanuvchi {user.telegram_id}") if user else f"ID {row.user_id}"
+        lines.append(f"{rank}. {html.escape(name)} — {row.vote_count} ta javob")
+
+    from school_bot.bot.utils.telegram import send_chunked_message
+    await send_chunked_message(
+        message,
+        "\n".join(lines),
+        reply_markup=get_teacher_votes_keyboard(),
+        parse_mode="HTML",
+    )

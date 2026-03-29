@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, Text, func, Index, String
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+    Index,
+    String,
+)
 from sqlalchemy import JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -256,7 +270,39 @@ class School(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     number: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    radius_m: Mapped[int] = mapped_column(Integer, default=150, server_default="150")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TeacherAttendance(Base):
+    __tablename__ = "teacher_attendance"
+    __table_args__ = (
+        UniqueConstraint("teacher_id", "attendance_date", "action", name="uq_teacher_attendance_daily_action"),
+        Index("ix_teacher_attendance_date", "attendance_date"),
+        Index("ix_teacher_attendance_school_date", "school_id", "attendance_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(
+        Enum("check_in", "check_out", name="attendance_action"),
+        nullable=False,
+        index=True,
+    )
+    teacher_lat: Mapped[float] = mapped_column(Float, nullable=False)
+    teacher_lon: Mapped[float] = mapped_column(Float, nullable=False)
+    school_lat: Mapped[float] = mapped_column(Float, nullable=False)
+    school_lon: Mapped[float] = mapped_column(Float, nullable=False)
+    distance_m: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_inside: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
+    attendance_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    teacher: Mapped[User] = relationship(foreign_keys=[teacher_id])
+    school: Mapped[School] = relationship(foreign_keys=[school_id])
 
 
 class Group(Base):

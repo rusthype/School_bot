@@ -39,6 +39,7 @@ class SuperAdminMenuBuilder:
         )
         builder.row(
             KeyboardButton(text="🏫 Maktablar"),
+            KeyboardButton(text="🕒 Davomat"),
         )
         builder.row(
             KeyboardButton(text="📢 Xabarnoma"),

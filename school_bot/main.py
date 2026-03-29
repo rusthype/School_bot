@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
@@ -23,6 +24,8 @@ from school_bot.bot.handlers import (
     superadmin_dashboard,
     logs,
     superadmin_settings,
+    teacher_attendance,
+    superadmin_attendance,
 )
 from school_bot.bot.middlewares.db_session import DbSessionMiddleware
 from school_bot.bot.middlewares.user_context import UserContextMiddleware
@@ -81,6 +84,8 @@ async def set_bot_commands(bot: Bot, superadmin_ids: list[int]) -> None:
         BotCommand(command="pending_groups", description="Kutilayotgan guruhlar"),
         BotCommand(command="users", description="Foydalanuvchilar menyusi"),
         BotCommand(command="admin_orders", description="Buyurtmalar"),
+        BotCommand(command="attendance_today", description="Bugungi davomat"),
+        BotCommand(command="attendance_school", description="Maktab bo'yicha davomat"),
         BotCommand(command="logs", description="Loglarni ko'rish"),
     ]
     try:
@@ -115,7 +120,8 @@ async def main() -> None:
     asyncio.create_task(start_overdue_order_watch(bot=bot, session_factory=session_factory))
     asyncio.create_task(start_log_cleanup_watch(settings))
 
-    dp = Dispatcher()
+    storage = RedisStorage.from_url(settings.redis_url)
+    dp = Dispatcher(storage=storage)
 
     dp.update.middleware(GroupAdminGuardMiddleware())
     dp.update.middleware(DbSessionMiddleware(session_factory=session_factory))
@@ -139,6 +145,8 @@ async def main() -> None:
     dp.include_router(superadmin_dashboard.router)
     dp.include_router(superadmin_settings.router)
     dp.include_router(logs.router)
+    dp.include_router(teacher_attendance.router)
+    dp.include_router(superadmin_attendance.router)
     dp.include_router(error_handler.router)
     dp.include_router(support.router)
     dp.include_router(group_join.router)
