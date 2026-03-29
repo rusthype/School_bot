@@ -93,3 +93,13 @@ ON teacher_attendance (attendance_date);
 CREATE INDEX IF NOT EXISTS ix_teacher_attendance_school_date
 ON teacher_attendance (school_id, attendance_date);
 """))
+
+            await conn.execute(text("""
+ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS notify_new_registration BOOLEAN NOT NULL DEFAULT TRUE;
+"""))
+            await conn.execute(text("""
+ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS notify_new_order BOOLEAN NOT NULL DEFAULT TRUE;
+"""))
+            await conn.execute(text("""
+ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS data_retention_days INTEGER NOT NULL DEFAULT 365;
+"""))

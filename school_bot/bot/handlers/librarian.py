@@ -24,7 +24,7 @@ from school_bot.bot.services.book_order_service import (
     mark_delivered,
     get_status_text,
 )
-from school_bot.bot.services.book_catalog_service import get_book_by_id
+from school_bot.bot.services.book_service import get_book_by_id
 from school_bot.bot.handlers.common import get_main_keyboard
 from school_bot.database.models import BookOrder, BookOrderItem, User, UserRole
 from school_bot.bot.services.logger_service import get_logger

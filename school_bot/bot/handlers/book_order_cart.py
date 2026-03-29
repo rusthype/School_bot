@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from school_bot.bot.handlers.common import get_main_keyboard
 from school_bot.bot.utils.telegram import send_chunked_to_chat
-from school_bot.bot.services.book_catalog_service import (
+from school_bot.bot.services.book_service import (
     list_categories,
     list_books_by_category,
     get_book_by_id,

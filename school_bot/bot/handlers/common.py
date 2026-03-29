@@ -25,23 +25,53 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
 from sqlalchemy.engine.url import make_url
 from datetime import datetime
-from school_bot.database.models import User, UserRole, Task, School, PollVote
+from school_bot.database.models import (
+    User, UserRole, Task, School, PollVote, Profile, Book,
+    BookOrder, BookOrderItem, BookCategory, TeacherAttendance, BotSettings,
+)
 from school_bot.bot.states.new_task import NewTaskStates
 from school_bot.bot.states.registration import RegistrationStates
 from school_bot.bot.states.book_states import CategoryAddStates
+from school_bot.bot.states.dashboard_states import (
+    SearchStates,
+    AddStudentStates,
+    BroadcastStates,
+    SendMessageStates,
+    PrivacySettingsStates,
+)
 from school_bot.bot.config import Settings
-from school_bot.bot.services.profile_service import upsert_profile, upsert_student_profile, can_register_again
-from school_bot.bot.services.profile_service import revoke_teacher
+from school_bot.bot.services.profile_service import (
+    upsert_profile,
+    upsert_student_profile,
+    can_register_again,
+    revoke_teacher,
+    get_profile_by_user_id,
+)
 from school_bot.bot.services.approval_service import notify_superadmins_new_registration
 from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.services.superadmin_menu_builder import SuperAdminMenuBuilder
 from school_bot.bot.services.school_service import list_schools, get_school_by_id, get_school_by_number
 from school_bot.bot.services.pagination import SchoolPagination
 from school_bot.bot.utils.telegram import send_chunked_message
-from school_bot.database.models import Profile, Book
+from school_bot.bot.services.bot_settings_service import get_or_create_settings, update_settings
+from school_bot.bot.services.book_order_service import get_order_stats
 router = Router(name=__name__)
 logger = get_logger(__name__)
-LAST_MENU_MESSAGE: dict[int, int] = {}
+from collections import OrderedDict
+
+
+class _LRUDict(OrderedDict):
+    def __init__(self, maxsize=1000):
+        super().__init__()
+        self._maxsize = maxsize
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        if len(self) > self._maxsize:
+            self.popitem(last=False)
+
+
+LAST_MENU_MESSAGE: _LRUDict = _LRUDict(maxsize=1000)
 async def _send_menu(message: Message, text: str, reply_markup):
     user_id = message.from_user.id if message.from_user else None
     last_id = LAST_MENU_MESSAGE.get(user_id) if user_id else None
@@ -480,6 +510,18 @@ async def registration_cancel_welcome(
     await message.answer("❌ Ro'yxatdan o'tish bekor qilindi.", reply_markup=ReplyKeyboardRemove())
 
 
+_NAME_PATTERN = re.compile(r"^[A-Za-zА-Яа-яЎўҚқҲҳЭэ\s'\-]+$")
+_PHONE_PATTERN = re.compile(r"^\+?[0-9]{9,13}$")
+
+
+def _validate_name(name: str) -> str | None:
+    if len(name) < 2 or len(name) > 50:
+        return "Ism 2 dan 50 gacha belgi bo'lishi kerak."
+    if not _NAME_PATTERN.match(name):
+        return "Ismda faqat harflar, probel, apostrof va tire ishlatish mumkin."
+    return None
+
+
 @router.message(RegistrationStates.first_name, F.text)
 async def registration_first_name(
     message: Message,
@@ -488,6 +530,10 @@ async def registration_first_name(
     first_name = (message.text or "").strip()
     if not first_name:
         await message.answer("❌ Ism bo'sh bo'lmasligi kerak. Qayta kiriting:")
+        return
+    error = _validate_name(first_name)
+    if error:
+        await message.answer(f"❌ {error} Qayta kiriting:")
         return
     await state.update_data(first_name=first_name)
     await state.set_state(RegistrationStates.last_name)
@@ -501,6 +547,11 @@ async def registration_last_name(
     session: AsyncSession,
 ) -> None:
     last_name = (message.text or "").strip()
+    if last_name:
+        error = _validate_name(last_name)
+        if error:
+            await message.answer(f"❌ {error} Qayta kiriting:")
+            return
     await state.update_data(last_name=last_name)
     schools = await list_schools(session)
     if not schools:
@@ -884,7 +935,7 @@ async def books_menu(
         return
     if not is_student:
         return
-    from school_bot.bot.services.book_catalog_service import list_categories
+    from school_bot.bot.services.book_service import list_categories
     categories = await list_categories(session)
     if not categories:
         await message.answer("📭 Hozircha kitoblar ro'yxati mavjud emas.")
@@ -1097,20 +1148,79 @@ async def button_all_polls(
     from school_bot.bot.handlers.admin import cmd_all_polls
     await cmd_all_polls(message, session, state, is_superadmin)
 @router.message(F.text == "📤 Eksport")
-async def teacher_export(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_export(
+    message: Message,
+    session: AsyncSession,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("📤 Eksport funksiyasi tez orada qo'shiladi.")
+    from school_bot.bot.services.attendance_service import tashkent_today
+    today = tashkent_today()
+    result = await session.execute(
+        select(TeacherAttendance, User)
+        .join(User, User.id == TeacherAttendance.teacher_id)
+        .where(TeacherAttendance.attendance_date == today)
+        .order_by(TeacherAttendance.created_at)
+    )
+    rows = result.all()
+    if not rows:
+        await message.answer("Bugun davomat ma'lumotlari yo'q")
+        return
+    import io
+    buf = io.StringIO()
+    buf.write("teacher_name,action,timestamp,distance_m,is_inside\n")
+    for attendance, user in rows:
+        name = (user.full_name or str(user.telegram_id)).replace(",", " ")
+        ts = attendance.created_at.strftime("%Y-%m-%d %H:%M:%S") if attendance.created_at else ""
+        buf.write(f"{name},{attendance.action},{ts},{attendance.distance_m},{attendance.is_inside}\n")
+    buf.seek(0)
+    doc = BufferedInputFile(buf.getvalue().encode("utf-8"), filename=f"davomat_{today}.csv")
+    await message.answer_document(doc, caption=f"Bugungi davomat: {len(rows)} ta yozuv")
 @router.message(F.text == "📤 Yuklash")
-async def teacher_upload_book(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_upload_book(
+    message: Message,
+    session: AsyncSession,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("📤 Kitob yuklash tez orada ishga tushadi.")
+    from sqlalchemy.orm import selectinload
+    now = datetime.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    result = await session.execute(
+        select(BookOrder)
+        .where(BookOrder.created_at >= month_start)
+        .options(
+            selectinload(BookOrder.items).selectinload(BookOrderItem.book),
+            selectinload(BookOrder.teacher),
+        )
+        .order_by(BookOrder.created_at.desc())
+    )
+    orders = result.scalars().all()
+    if not orders:
+        await message.answer("Bu oy buyurtmalar yo'q")
+        return
+    import io
+    buf = io.StringIO()
+    buf.write("order_id,teacher_name,book_title,quantity,status,created_at\n")
+    for order in orders:
+        teacher_name = (order.teacher.full_name or str(order.teacher.telegram_id)).replace(",", " ") if order.teacher else "Noma'lum"
+        for item in order.items:
+            title = (item.book.title if item.book else f"ID:{item.book_id}").replace(",", " ")
+            ts = order.created_at.strftime("%Y-%m-%d %H:%M:%S") if order.created_at else ""
+            buf.write(f"{order.id},{teacher_name},{title},{item.quantity},{order.status},{ts}\n")
+    buf.seek(0)
+    month_str = now.strftime("%Y_%m")
+    doc = BufferedInputFile(buf.getvalue().encode("utf-8"), filename=f"buyurtmalar_{month_str}.csv")
+    await message.answer_document(doc, caption=f"Bu oy buyurtmalar: {len(orders)} ta")
 @router.message(F.text == "📋 Barcha kitoblar")
 async def teacher_list_books(message: Message, session: AsyncSession, is_teacher: bool = False, is_superadmin: bool = False) -> None:
     if not (is_teacher or is_superadmin):
         return
-    from school_bot.bot.services.book_catalog_service import list_categories
+    from school_bot.bot.services.book_service import list_categories
     categories = await list_categories(session)
     if not categories:
         await message.answer("📭 Kitoblar ro'yxati mavjud emas.")
@@ -1136,7 +1246,7 @@ async def teacher_books_category_select(
     except ValueError:
         await callback.answer("❌ Noto'g'ri tanlov", show_alert=True)
         return
-    from school_bot.bot.services.book_catalog_service import get_category_by_id, list_books_by_category
+    from school_bot.bot.services.book_service import get_category_by_id, list_books_by_category
     category = await get_category_by_id(session, category_id)
     if not category:
         await callback.answer("❌ Kategoriya topilmadi", show_alert=True)
@@ -1165,7 +1275,7 @@ async def teacher_books_back(
     if not (is_teacher or is_superadmin):
         await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
         return
-    from school_bot.bot.services.book_catalog_service import list_categories
+    from school_bot.bot.services.book_service import list_categories
     categories = await list_categories(session)
     if not categories:
         await callback.answer("📭 Kategoriyalar yo'q.", show_alert=True)
@@ -1178,15 +1288,79 @@ async def teacher_books_back(
     await callback.message.edit_text("📚 Kategoriyani tanlang:", reply_markup=builder.as_markup())
     await callback.answer()
 @router.message(F.text == "🔍 Qidirish")
-async def teacher_search_books(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_search_books(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("🔍 Qidirish funksiyasi tez orada qo'shiladi.")
+    await state.set_state(SearchStates.waiting_for_query)
+    await message.answer(
+        "🔍 Qidiruv so'zini kiriting (ism yoki telefon):",
+        reply_markup=get_cancel_keyboard(),
+    )
+
+
+@router.message(SearchStates.waiting_for_query, F.text == "❌ Bekor qilish")
+async def search_cancel(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    await state.clear()
+    await state.update_data(menu_active=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher)
+    await message.answer("Qidiruv bekor qilindi.", reply_markup=keyboard)
+
+
+@router.message(SearchStates.waiting_for_query, F.text)
+async def search_query_handler(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    query = (message.text or "").strip()
+    if not query or len(query) < 2:
+        await message.answer("Kamida 2 ta belgi kiriting:")
+        return
+    like_q = f"%{query}%"
+    result = await session.execute(
+        select(User, Profile)
+        .outerjoin(Profile, User.id == Profile.user_id)
+        .where(
+            (User.full_name.ilike(like_q)) | (Profile.phone.ilike(like_q))
+        )
+        .order_by(User.full_name)
+        .limit(10)
+    )
+    rows = result.all()
+    await state.clear()
+    await state.update_data(menu_active=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher)
+    if not rows:
+        await message.answer("Hech narsa topilmadi.", reply_markup=keyboard)
+        return
+    lines = [f"🔍 Qidiruv natijalari ({len(rows)} ta):", ""]
+    for user, profile in rows:
+        name = user.full_name or f"ID: {user.telegram_id}"
+        role = user.role.value if user.role else "foydalanuvchi"
+        school_info = ""
+        if profile and profile.school_id:
+            school = await session.get(School, profile.school_id)
+            if school:
+                school_info = f" | {school.name}"
+        lines.append(f"- {name} ({role}){school_info}")
+    await message.answer("\n".join(lines), reply_markup=keyboard)
 @router.message(F.text == "📂 Kategoriyalar")
 async def teacher_book_categories(message: Message, session: AsyncSession, is_teacher: bool = False, is_superadmin: bool = False) -> None:
     if not (is_teacher or is_superadmin):
         return
-    from school_bot.bot.services.book_catalog_service import list_categories
+    from school_bot.bot.services.book_service import list_categories
     categories = await list_categories(session)
     if not categories:
         await message.answer("📭 Kategoriyalar ro'yxati mavjud emas.")
@@ -1196,55 +1370,619 @@ async def teacher_book_categories(message: Message, session: AsyncSession, is_te
         lines.append(f"• {category.name}")
     await message.answer("\n".join(lines))
 @router.message(F.text == "➕ Yangi o'quvchi")
-async def teacher_add_student(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_add_student(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("➕ O'quvchi qo'shish funksiyasi tez orada qo'shiladi.")
+    await state.set_state(AddStudentStates.first_name)
+    await message.answer(
+        "👤 O'quvchining ismini kiriting:",
+        reply_markup=get_cancel_keyboard(),
+    )
+
+
+@router.message(AddStudentStates.first_name, F.text == "❌ Bekor qilish")
+@router.message(AddStudentStates.last_name, F.text == "❌ Bekor qilish")
+@router.message(AddStudentStates.phone, F.text == "❌ Bekor qilish")
+async def add_student_cancel(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    await state.clear()
+    await state.update_data(menu_active=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher)
+    await message.answer("O'quvchi qo'shish bekor qilindi.", reply_markup=keyboard)
+
+
+@router.message(AddStudentStates.first_name, F.text)
+async def add_student_first_name(message: Message, state: FSMContext) -> None:
+    first_name = (message.text or "").strip()
+    if not first_name:
+        await message.answer("Ism bo'sh bo'lmasligi kerak. Qayta kiriting:")
+        return
+    error = _validate_name(first_name)
+    if error:
+        await message.answer(f"❌ {error} Qayta kiriting:")
+        return
+    await state.update_data(student_first_name=first_name)
+    await state.set_state(AddStudentStates.last_name)
+    await message.answer("👤 Familiyani kiriting:", reply_markup=get_cancel_keyboard())
+
+
+@router.message(AddStudentStates.last_name, F.text)
+async def add_student_last_name(message: Message, state: FSMContext) -> None:
+    last_name = (message.text or "").strip()
+    if last_name:
+        error = _validate_name(last_name)
+        if error:
+            await message.answer(f"❌ {error} Qayta kiriting:")
+            return
+    await state.update_data(student_last_name=last_name)
+    await state.set_state(AddStudentStates.phone)
+    await message.answer("📱 Telefon raqamini kiriting (+998...):", reply_markup=get_cancel_keyboard())
+
+
+@router.message(AddStudentStates.phone, F.text)
+async def add_student_phone(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    phone = (message.text or "").strip()
+    if not _PHONE_PATTERN.match(phone):
+        await message.answer("❌ Telefon raqami noto'g'ri (9-13 raqam, boshida + bo'lishi mumkin). Qayta kiriting:")
+        return
+    await state.update_data(student_phone=phone)
+    schools = await list_schools(session)
+    if not schools:
+        await message.answer("Maktablar topilmadi. Administrator bilan bog'laning.")
+        await state.clear()
+        return
+    await state.set_state(AddStudentStates.school_selection)
+    keyboard = build_registration_school_keyboard(schools, page=1)
+    await message.answer("🏫 Maktabni tanlang:", reply_markup=keyboard)
+
+
+@router.callback_query(AddStudentStates.school_selection, lambda c: c.data.startswith("reg_school_select:"))
+async def add_student_school_select(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    try:
+        number = int(callback.data.split(":")[1])
+    except Exception:
+        await callback.answer("❌ Noto'g'ri maktab", show_alert=True)
+        return
+    school = await get_school_by_number(session, number)
+    if not school:
+        await callback.answer("❌ Maktab topilmadi", show_alert=True)
+        return
+    await state.update_data(student_school_id=school.id)
+    await state.set_state(AddStudentStates.class_group)
+    await callback.message.edit_text(
+        f"Maktab: {school.name}\n\nSinf nomini kiriting (masalan: 3-A):"
+    )
+    await callback.answer()
+
+
+@router.callback_query(AddStudentStates.school_selection, lambda c: c.data.startswith("reg_school_page:"))
+async def add_student_school_page(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+    try:
+        page = int(callback.data.split(":")[1])
+    except Exception:
+        page = 1
+    schools = await list_schools(session)
+    if not schools:
+        await callback.answer("Maktablar topilmadi", show_alert=True)
+        return
+    keyboard = build_registration_school_keyboard(schools, page=page)
+    total_pages = max(1, (len(schools) + 9) // 10)
+    await callback.message.edit_text(
+        f"🏫 Maktabni tanlang ({page}/{total_pages} sahifa):",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+@router.message(AddStudentStates.class_group, F.text)
+async def add_student_class_group(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    db_user,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    class_name = (message.text or "").strip()
+    if not class_name:
+        await message.answer("Sinf nomi bo'sh bo'lmasligi kerak. Qayta kiriting:")
+        return
+    data = await state.get_data()
+    first_name = data.get("student_first_name", "")
+    last_name = data.get("student_last_name", "")
+    phone = data.get("student_phone", "")
+    school_id = data.get("student_school_id")
+    # Create a placeholder user for the student (no telegram_id yet)
+    # We use upsert_student_profile approach but need a user row
+    # Since this is a manual add, we create user with telegram_id=0 + random offset
+    import random
+    placeholder_tg_id = -(random.randint(100000, 9999999))
+    from school_bot.bot.services.user_service import get_or_create_user
+    student_user = await get_or_create_user(session, telegram_id=placeholder_tg_id, full_name=f"{first_name} {last_name}".strip())
+    student_user.role = UserRole.student
+    await session.commit()
+    await upsert_student_profile(
+        session,
+        user_id=student_user.id,
+        first_name=first_name,
+        last_name=last_name,
+        phone=phone,
+        class_name=class_name,
+        school_id=school_id,
+    )
+    await state.clear()
+    await state.update_data(menu_active=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher)
+    await message.answer(
+        f"✅ O'quvchi qo'shildi!\n\n"
+        f"👤 {first_name} {last_name}\n"
+        f"📱 {phone}\n"
+        f"📚 Sinf: {class_name}",
+        reply_markup=keyboard,
+    )
 @router.message(F.text == "📋 Ro'yxat")
-async def teacher_student_list(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_student_list(
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    profile,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("📋 O'quvchilar ro'yxati tez orada qo'shiladi.")
+    result = await session.execute(
+        select(User, Profile)
+        .join(Profile, User.id == Profile.user_id)
+        .where(Profile.profile_type == "student")
+        .order_by(Profile.first_name)
+        .limit(50)
+    )
+    rows = result.all()
+    if not rows:
+        await message.answer("📭 O'quvchilar topilmadi.", reply_markup=get_teacher_students_keyboard())
+        return
+    lines = [f"📋 O'quvchilar ({len(rows)} ta):", ""]
+    for user, prof in rows:
+        name = f"{prof.first_name} {prof.last_name or ''}".strip()
+        groups = ", ".join(prof.assigned_groups) if prof.assigned_groups else "-"
+        lines.append(f"- {name} | {groups}")
+    await send_chunked_message(message, "\n".join(lines), reply_markup=get_teacher_students_keyboard())
 @router.message(F.text == "📊 Davomat")
-async def teacher_attendance(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_attendance(
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("📊 Davomat bo'limi tez orada ishga tushadi.")
+    from school_bot.bot.services.attendance_service import tashkent_today
+    today = tashkent_today()
+    result = await session.execute(
+        select(TeacherAttendance, User)
+        .join(User, User.id == TeacherAttendance.teacher_id)
+        .where(TeacherAttendance.attendance_date == today)
+        .order_by(TeacherAttendance.created_at)
+    )
+    rows = result.all()
+    if not rows:
+        await message.answer("Bugun davomat ma'lumotlari yo'q.", reply_markup=get_teacher_students_keyboard())
+        return
+    lines = [f"📊 Bugungi davomat ({len(rows)} ta):", ""]
+    for att, user in rows:
+        name = user.full_name or str(user.telegram_id)
+        status = "maktabda" if att.is_inside else f"tashqarida ({att.distance_m}m)"
+        action = "Keldim" if att.action == "check_in" else "Ketdim"
+        ts = att.created_at.strftime("%H:%M") if att.created_at else ""
+        lines.append(f"- {name}: {action} {ts} ({status})")
+    await send_chunked_message(message, "\n".join(lines), reply_markup=get_teacher_students_keyboard())
 @router.message(F.text == "📧 Xabar yuborish")
-async def teacher_send_message(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_send_message(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("📧 Xabar yuborish funksiyasi tez orada qo'shiladi.")
+    await state.set_state(SendMessageStates.waiting_for_target)
+    await message.answer(
+        "Foydalanuvchining username yoki Telegram ID sini kiriting:",
+        reply_markup=get_cancel_keyboard(),
+    )
+
+
+@router.message(SendMessageStates.waiting_for_target, F.text == "❌ Bekor qilish")
+@router.message(SendMessageStates.waiting_for_text, F.text == "❌ Bekor qilish")
+async def send_msg_cancel(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    await state.clear()
+    await state.update_data(menu_active=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher)
+    await message.answer("Xabar yuborish bekor qilindi.", reply_markup=keyboard)
+
+
+@router.message(SendMessageStates.waiting_for_target, F.text)
+async def send_msg_target(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    target = (message.text or "").strip().lstrip("@")
+    if not target:
+        await message.answer("Iltimos, username yoki ID kiriting:")
+        return
+    # Try as telegram ID first
+    user = None
+    try:
+        tg_id = int(target)
+        result = await session.execute(select(User).where(User.telegram_id == tg_id))
+        user = result.scalar_one_or_none()
+    except ValueError:
+        # Search by username
+        result = await session.execute(select(User).where(User.username == target))
+        user = result.scalar_one_or_none()
+    if not user:
+        await message.answer("❌ Foydalanuvchi topilmadi. Qayta kiriting yoki ❌ Bekor qilish bosing.")
+        return
+    await state.update_data(send_target_tg_id=user.telegram_id, send_target_name=user.full_name or str(user.telegram_id))
+    await state.set_state(SendMessageStates.waiting_for_text)
+    await message.answer(
+        f"Xabar matni kiriting ({user.full_name or user.telegram_id} ga yuboriladi):",
+        reply_markup=get_cancel_keyboard(),
+    )
+
+
+@router.message(SendMessageStates.waiting_for_text, F.text)
+async def send_msg_text(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Xabar bo'sh bo'lmasligi kerak:")
+        return
+    data = await state.get_data()
+    tg_id = data.get("send_target_tg_id")
+    name = data.get("send_target_name", "")
+    await state.clear()
+    await state.update_data(menu_active=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher)
+    try:
+        await message.bot.send_message(chat_id=tg_id, text=text)
+        await message.answer(f"✅ Xabar yuborildi: {name}", reply_markup=keyboard)
+    except Exception as exc:
+        await message.answer(f"❌ Xabar yuborib bo'lmadi: {exc}", reply_markup=keyboard)
 @router.message(F.text == "👥 Faol o'quvchilar")
-async def teacher_active_students(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_active_students(
+    message: Message,
+    session: AsyncSession,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("👥 Faol o'quvchilar statistikasi tez orada qo'shiladi.")
+    from datetime import timedelta
+    seven_days_ago = datetime.now() - timedelta(days=7)
+    # Find users who voted in last 7 days
+    result = await session.execute(
+        select(User)
+        .join(PollVote, PollVote.user_id == User.id)
+        .where(PollVote.voted_at >= seven_days_ago)
+        .group_by(User.id)
+        .order_by(func.count(PollVote.id).desc())
+        .limit(30)
+    )
+    users = result.scalars().all()
+    if not users:
+        await message.answer("Oxirgi 7 kunda faol o'quvchilar topilmadi.", reply_markup=get_teacher_stats_keyboard())
+        return
+    lines = [f"👥 Faol o'quvchilar (oxirgi 7 kun, {len(users)} ta):", ""]
+    for i, user in enumerate(users, 1):
+        name = user.full_name or f"ID: {user.telegram_id}"
+        lines.append(f"{i}. {name}")
+    await send_chunked_message(message, "\n".join(lines), reply_markup=get_teacher_stats_keyboard())
 @router.message(F.text == "📝 Topshiriqlar")
-async def teacher_task_stats(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_task_stats(
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("📝 Topshiriqlar statistikasi tez orada qo'shiladi.")
+    from sqlalchemy.orm import selectinload
+    stmt = (
+        select(Task)
+        .where(Task.teacher_id == db_user.id)
+        .options(selectinload(Task.poll_votes))
+        .order_by(Task.created_at.desc())
+        .limit(20)
+    )
+    tasks = (await session.execute(stmt)).scalars().all()
+    if not tasks:
+        await message.answer("Topshiriqlar topilmadi.", reply_markup=get_teacher_stats_keyboard())
+        return
+    lines = [f"📝 Topshiriqlar statistikasi ({len(tasks)} ta):", ""]
+    for task in tasks:
+        votes_by_option: dict[int, int] = {}
+        for vote in task.poll_votes:
+            votes_by_option[vote.option_id] = votes_by_option.get(vote.option_id, 0) + 1
+        total_votes = sum(votes_by_option.values())
+        import html as _html
+        topic = _html.escape(task.topic or "Mavzu yo'q")
+        if votes_by_option:
+            # Summarize: option 0,1 = "yaxshi", option 2,3 = "yomon"
+            good = votes_by_option.get(0, 0) + votes_by_option.get(1, 0)
+            bad = votes_by_option.get(2, 0) + votes_by_option.get(3, 0)
+            lines.append(f"📋 {topic}")
+            lines.append(f"  Jami: {total_votes} | Yaxshi: {good} | Yomon: {bad}")
+        else:
+            lines.append(f"📋 {topic}")
+            lines.append("  Ovozlar yo'q")
+        lines.append("")
+    await send_chunked_message(message, "\n".join(lines), reply_markup=get_teacher_stats_keyboard())
 @router.message(F.text == "📚 Kitoblar (stat)")
-async def teacher_book_stats(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_book_stats(
+    message: Message,
+    session: AsyncSession,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("📚 Kitoblar statistikasi tez orada qo'shiladi.")
+    order_stats = await get_order_stats(session)
+    # Top 5 most ordered books
+    top_books_result = await session.execute(
+        select(Book.title, func.sum(BookOrderItem.quantity).label("total"))
+        .join(BookOrderItem, BookOrderItem.book_id == Book.id)
+        .group_by(Book.id, Book.title)
+        .order_by(func.sum(BookOrderItem.quantity).desc())
+        .limit(5)
+    )
+    top_books = top_books_result.all()
+    # Orders by category
+    cat_result = await session.execute(
+        select(BookCategory.name, func.count(BookOrderItem.id).label("cnt"))
+        .join(Book, Book.category_id == BookCategory.id)
+        .join(BookOrderItem, BookOrderItem.book_id == Book.id)
+        .group_by(BookCategory.id, BookCategory.name)
+        .order_by(func.count(BookOrderItem.id).desc())
+    )
+    categories = cat_result.all()
+    lines = ["📚 Kitoblar statistikasi:", ""]
+    lines.append("Buyurtma statuslari:")
+    for status, count in order_stats.items():
+        lines.append(f"  {status}: {count}")
+    lines.append("")
+    if top_books:
+        lines.append("Eng ko'p buyurtma qilingan kitoblar (Top 5):")
+        for i, (title, total) in enumerate(top_books, 1):
+            lines.append(f"  {i}. {title} — {int(total or 0)} dona")
+        lines.append("")
+    if categories:
+        lines.append("Kategoriyalar bo'yicha buyurtmalar:")
+        for name, cnt in categories:
+            lines.append(f"  {name}: {int(cnt or 0)} ta")
+    await send_chunked_message(message, "\n".join(lines), reply_markup=get_teacher_stats_keyboard())
 @router.message(F.text == "📊 Umumiy hisobot")
-async def teacher_general_report(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_general_report(
+    message: Message,
+    session: AsyncSession,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("📊 Umumiy hisobot tez orada qo'shiladi.")
+    now = datetime.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    # Users registered this month
+    new_users = await session.scalar(
+        select(func.count()).select_from(User).where(User.created_at >= month_start)
+    ) or 0
+    # Orders this month by status
+    order_stats = {}
+    for status in ["pending", "confirmed", "delivered", "rejected"]:
+        cnt = await session.scalar(
+            select(func.count()).where(
+                BookOrder.status == status,
+                BookOrder.created_at >= month_start,
+            )
+        ) or 0
+        order_stats[status] = cnt
+    # Tasks this month
+    tasks_count = await session.scalar(
+        select(func.count()).select_from(Task).where(Task.created_at >= month_start)
+    ) or 0
+    # Attendance this month
+    from school_bot.bot.services.attendance_service import tashkent_today
+    att_check_in = await session.scalar(
+        select(func.count()).where(
+            TeacherAttendance.action == "check_in",
+            TeacherAttendance.created_at >= month_start,
+        )
+    ) or 0
+    att_late = await session.scalar(
+        select(func.count()).where(
+            TeacherAttendance.action == "check_in",
+            TeacherAttendance.is_inside == False,
+            TeacherAttendance.created_at >= month_start,
+        )
+    ) or 0
+    month_name = now.strftime("%B %Y")
+    lines = [
+        f"📊 Umumiy hisobot ({month_name})",
+        "",
+        f"👥 Yangi foydalanuvchilar: {new_users}",
+        "",
+        "📦 Buyurtmalar:",
+        f"  Kutilmoqda: {order_stats.get('pending', 0)}",
+        f"  Tasdiqlangan: {order_stats.get('confirmed', 0)}",
+        f"  Yetkazilgan: {order_stats.get('delivered', 0)}",
+        f"  Rad etilgan: {order_stats.get('rejected', 0)}",
+        "",
+        f"📝 Topshiriqlar: {tasks_count}",
+        "",
+        f"🕒 Davomat (check_in): {att_check_in}",
+        f"  Kech kelganlar (tashqarida): {att_late}",
+    ]
+    await message.answer("\n".join(lines), reply_markup=get_teacher_stats_keyboard())
+def _notif_toggle_icon(val: bool) -> str:
+    return "✅" if val else "❌"
+
+
+def _build_notification_settings_keyboard(settings: BotSettings) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{_notif_toggle_icon(settings.notify_new_registration)} Yangi ro'yxatdan o'tish",
+                    callback_data="notif_toggle:notify_new_registration",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{_notif_toggle_icon(settings.notify_new_order)} Yangi buyurtma",
+                    callback_data="notif_toggle:notify_new_order",
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Orqaga", callback_data="notif_toggle:back"),
+            ],
+        ]
+    )
+
+
 @router.message(F.text == "🔔 Bildirishnomalar")
-async def teacher_notifications_settings(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_notifications_settings(
+    message: Message,
+    session: AsyncSession,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("🔔 Bildirishnomalar sozlamalari tez orada qo'shiladi.")
+    settings = await get_or_create_settings(session)
+    await message.answer(
+        "🔔 Bildirishnoma sozlamalari:",
+        reply_markup=_build_notification_settings_keyboard(settings),
+    )
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("notif_toggle:"))
+async def notif_toggle_callback(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    if not (is_teacher or is_superadmin):
+        await callback.answer()
+        return
+    field = callback.data.split(":", 1)[1]
+    if field == "back":
+        keyboard = get_teacher_settings_keyboard()
+        await callback.message.answer("⚙️ Sozlamalar", reply_markup=keyboard)
+        await callback.answer()
+        return
+    settings = await get_or_create_settings(session)
+    if not hasattr(settings, field):
+        await callback.answer("Noto'g'ri sozlama", show_alert=True)
+        return
+    current = getattr(settings, field)
+    await update_settings(session, **{field: not current})
+    settings = await get_or_create_settings(session)
+    await callback.message.edit_reply_markup(reply_markup=_build_notification_settings_keyboard(settings))
+    await callback.answer("Yangilandi")
 @router.message(F.text == "🔒 Maxfiylik")
-async def teacher_privacy_settings(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
+async def teacher_privacy_settings(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
     if not (is_teacher or is_superadmin):
         return
-    await message.answer("🔒 Maxfiylik sozlamalari tez orada qo'shiladi.")
+    settings = await get_or_create_settings(session)
+    text = (
+        "🔒 Maxfiylik sozlamalari\n\n"
+        "Ma'lumotlar saqlanish siyosati:\n"
+        "- Shaxsiy ma'lumotlar faqat bot ishlashi uchun saqlanadi\n"
+        "- Foydalanuvchi istalgan vaqtda /stop orqali o'z ma'lumotlarini o'chirishni so'rashi mumkin\n"
+        "- Uchinchi tomonlarga ma'lumot berilmaydi\n\n"
+        f"Nofaol foydalanuvchilarni o'chirish: {settings.data_retention_days} kun\n"
+    )
+    if is_superadmin:
+        text += "\nKunlar sonini o'zgartirish uchun raqam kiriting:"
+        await state.set_state(PrivacySettingsStates.waiting_for_days)
+        await message.answer(text, reply_markup=get_cancel_keyboard())
+    else:
+        await message.answer(text, reply_markup=get_teacher_settings_keyboard())
+
+
+@router.message(PrivacySettingsStates.waiting_for_days, F.text == "❌ Bekor qilish")
+async def privacy_cancel(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    await state.clear()
+    await state.update_data(menu_active=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher)
+    await message.answer("Bekor qilindi.", reply_markup=keyboard)
+
+
+@router.message(PrivacySettingsStates.waiting_for_days, F.text)
+async def privacy_set_days(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+    is_teacher: bool = False,
+) -> None:
+    if not is_superadmin:
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    try:
+        days = int(text)
+        if days < 30 or days > 3650:
+            raise ValueError
+    except ValueError:
+        await message.answer("30 dan 3650 gacha bo'lgan raqam kiriting:")
+        return
+    await update_settings(session, data_retention_days=days)
+    await state.clear()
+    await state.update_data(menu_active=True)
+    keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher)
+    await message.answer(f"✅ Ma'lumot saqlash muddati {days} kunga o'zgartirildi.", reply_markup=keyboard)
 @router.message(F.text == "➕ Maktab qo'shish")
 async def button_add_school(
         message: Message,
@@ -1453,10 +2191,128 @@ async def admin_stats_menu_alias_short(message: Message, is_superadmin: bool = F
         return
     await show_stats_menu(message, is_superadmin=True)
 @router.message(F.text == "📢 Xabarnoma")
-async def admin_broadcast(message: Message, is_superadmin: bool = False) -> None:
+async def admin_broadcast(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
     if not is_superadmin:
         return
-    await message.answer("📢 Xabarnoma yuborish bo'limi tez orada qo'shiladi.")
+    total_users = await session.scalar(
+        select(func.count()).select_from(User).where(User.telegram_id > 0)
+    ) or 0
+    await state.set_state(BroadcastStates.waiting_for_message)
+    await message.answer(
+        f"📢 Xabarnoma yuborish\n\nBarcha foydalanuvchilarga ({total_users} ta) yuboriladi.\n"
+        "Xabar matnini kiriting (rasm ham yuborsa bo'ladi):",
+        reply_markup=get_cancel_keyboard(),
+    )
+
+
+@router.message(BroadcastStates.waiting_for_message, F.text == "❌ Bekor qilish")
+@router.message(BroadcastStates.waiting_for_confirm, F.text == "❌ Bekor qilish")
+async def broadcast_cancel(
+    message: Message,
+    state: FSMContext,
+    is_superadmin: bool = False,
+) -> None:
+    await state.clear()
+    await state.update_data(menu_active=True)
+    builder = SuperAdminMenuBuilder()
+    await message.answer("Xabarnoma bekor qilindi.", reply_markup=builder.build_main_keyboard())
+
+
+@router.message(BroadcastStates.waiting_for_message, F.photo)
+async def broadcast_photo(message: Message, state: FSMContext) -> None:
+    photo = message.photo[-1]
+    caption = message.caption or ""
+    await state.update_data(broadcast_photo_id=photo.file_id, broadcast_text=caption)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, yuborish", callback_data="broadcast_confirm")
+    builder.button(text="❌ Bekor qilish", callback_data="broadcast_cancel")
+    builder.adjust(2)
+    await state.set_state(BroadcastStates.waiting_for_confirm)
+    await message.answer(
+        f"Rasm + matn yuboriladi. Tasdiqlaysizmi?",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.message(BroadcastStates.waiting_for_message, F.text)
+async def broadcast_text(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Xabar bo'sh bo'lmasligi kerak:")
+        return
+    await state.update_data(broadcast_text=text, broadcast_photo_id=None)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, yuborish", callback_data="broadcast_confirm")
+    builder.button(text="❌ Bekor qilish", callback_data="broadcast_cancel")
+    builder.adjust(2)
+    await state.set_state(BroadcastStates.waiting_for_confirm)
+    await message.answer(
+        f"Xabar yuboriladi. Tasdiqlaysizmi?\n\nMatn: {text[:200]}",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(BroadcastStates.waiting_for_confirm, lambda c: c.data == "broadcast_cancel")
+async def broadcast_cancel_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.update_data(menu_active=True)
+    builder = SuperAdminMenuBuilder()
+    await callback.message.answer("Xabarnoma bekor qilindi.", reply_markup=builder.build_main_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(BroadcastStates.waiting_for_confirm, lambda c: c.data == "broadcast_confirm")
+async def broadcast_confirm_cb(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    data = await state.get_data()
+    text = data.get("broadcast_text", "")
+    photo_id = data.get("broadcast_photo_id")
+    await state.clear()
+    await state.update_data(menu_active=True)
+    result = await session.execute(
+        select(User.telegram_id).where(User.telegram_id > 0)
+    )
+    tg_ids = [row[0] for row in result.all()]
+    loading = await callback.message.answer(f"Yuborilmoqda... (0/{len(tg_ids)})")
+    success = 0
+    failed = 0
+    for i, tg_id in enumerate(tg_ids):
+        try:
+            if photo_id:
+                await callback.bot.send_photo(chat_id=tg_id, photo=photo_id, caption=text)
+            else:
+                await callback.bot.send_message(chat_id=tg_id, text=text)
+            success += 1
+        except Exception:
+            failed += 1
+        if (i + 1) % 50 == 0:
+            try:
+                await loading.edit_text(f"Yuborilmoqda... ({i + 1}/{len(tg_ids)})")
+            except Exception:
+                pass
+        # Telegram rate limit: ~30 msg/sec
+        if (i + 1) % 25 == 0:
+            import asyncio as _asyncio
+            await _asyncio.sleep(1)
+    builder = SuperAdminMenuBuilder()
+    try:
+        await loading.edit_text(
+            f"✅ Xabarnoma yakunlandi!\n\n"
+            f"Yuborildi: {success} ta\n"
+            f"Xato: {failed} ta"
+        )
+    except Exception:
+        pass
+    await callback.message.answer("Asosiy menyu:", reply_markup=builder.build_main_keyboard())
+    await callback.answer()
 @router.message(F.text == "📥 Backup")
 async def admin_backup(message: Message, is_superadmin: bool = False) -> None:
     if not is_superadmin:

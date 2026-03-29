@@ -341,6 +341,11 @@ class BotSettings(Base):
     notify_stats: Mapped[bool] = mapped_column(Boolean, default=False)
     notify_marketing: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    notify_new_registration: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    notify_new_order: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    data_retention_days: Mapped[int] = mapped_column(Integer, default=365, server_default="365")
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
