@@ -27,8 +27,7 @@ async def seed_schools(session_factory) -> None:
         if existing and existing > 0:
             return
 
-        for i in range(1, 47):
-            session.add(School(number=i, name=f"{i}-maktab"))
+        session.add(School(number=39, name="39-maktab"))
 
         await session.commit()
 
