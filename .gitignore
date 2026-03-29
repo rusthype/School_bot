@@ -146,7 +146,6 @@ temp/
 .docker/
 docker-compose.override.yml
 *.pid
-Dockerfile
 docker-compose.yml  # Keep if needed, but usually committed
 
 # Celery
