@@ -41,7 +41,7 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     role: Mapped[UserRole | None] = mapped_column(
-        Enum(UserRole, name="user_role"),
+        String(20),
         nullable=True,
         index=True,
     )
@@ -356,7 +356,7 @@ class TeacherAttendance(Base):
     teacher_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False, index=True)
     school_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_schools.id", ondelete="CASCADE"), nullable=False, index=True)
     action: Mapped[str] = mapped_column(
-        Enum("check_in", "check_out", name="attendance_action"),
+        String(20),
         nullable=False,
         index=True,
     )
