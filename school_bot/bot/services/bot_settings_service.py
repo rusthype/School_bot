@@ -3,16 +3,16 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from school_bot.database.models import BotSettings, BOT_SETTINGS_UUID
+from school_bot.database.models import BotSettings, BOT_SETTINGS_ID
 
 
 async def get_or_create_settings(session: AsyncSession) -> BotSettings:
-    result = await session.execute(select(BotSettings).where(BotSettings.id == BOT_SETTINGS_UUID))
+    result = await session.execute(select(BotSettings).where(BotSettings.id == BOT_SETTINGS_ID))
     settings = result.scalar_one_or_none()
     if settings:
         return settings
 
-    settings = BotSettings(id=BOT_SETTINGS_UUID)
+    settings = BotSettings(id=BOT_SETTINGS_ID)
     session.add(settings)
     await session.commit()
     await session.refresh(settings)

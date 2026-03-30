@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 
 from aiogram import Router, F
@@ -206,7 +205,7 @@ async def set_delivery_date_start(
         return
 
     try:
-        order_id = uuid.UUID(callback.data.split(":")[1])
+        order_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -230,7 +229,7 @@ async def processing_order_callback(
         return
 
     try:
-        order_id = uuid.UUID(callback.data.split(":")[1])
+        order_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -293,7 +292,7 @@ async def set_delivery_date_submit(
         await message.answer("❌ Sana formati noto'g'ri. Masalan: 15.03.2026")
         return
 
-    order = await get_book_order_by_id(session, uuid.UUID(str(order_id)) if not isinstance(order_id, uuid.UUID) else order_id)
+    order = await get_book_order_by_id(session, int(order_id))
     if not order:
         await message.answer("❌ Buyurtma topilmadi.")
         await state.clear()
@@ -317,7 +316,7 @@ async def confirm_order_callback(
         return
 
     try:
-        order_id = uuid.UUID(callback.data.split(":")[1])
+        order_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -366,7 +365,7 @@ async def reject_order_callback(
         return
 
     try:
-        order_id = uuid.UUID(callback.data.split(":")[1])
+        order_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -415,7 +414,7 @@ async def deliver_order_callback(
         return
 
     try:
-        order_id = uuid.UUID(callback.data.split(":")[1])
+        order_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -489,7 +488,7 @@ async def cmd_set_delivery(
 
     if len(parts) == 1:
         try:
-            order_id_val = uuid.UUID(parts[0])
+            order_id_val = int(parts[0])
         except ValueError:
             await message.answer("❌ Order ID noto'g'ri.")
             return
@@ -500,7 +499,7 @@ async def cmd_set_delivery(
     if len(parts) >= 2:
         order_id_str, date_str = parts[0], parts[1]
         try:
-            order_id_val = uuid.UUID(order_id_str)
+            order_id_val = int(order_id_str)
         except ValueError:
             await message.answer("❌ Order ID noto'g'ri.")
             return
@@ -538,7 +537,7 @@ async def cmd_confirm_order(
         return
 
     try:
-        order_id = uuid.UUID(command.args.strip())
+        order_id = int(command.args.strip())
     except ValueError:
         await message.answer("❌ Noto'g'ri order ID.")
         return
@@ -616,7 +615,7 @@ async def cmd_mark_done(
         return
 
     try:
-        order_id = uuid.UUID(command.args.strip())
+        order_id = int(command.args.strip())
     except ValueError:
         await message.answer("❌ Noto'g'ri order ID.")
         return

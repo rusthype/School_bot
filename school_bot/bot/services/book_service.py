@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +18,7 @@ async def list_categories(session: AsyncSession) -> list[BookCategory]:
     return list(result.scalars().all())
 
 
-async def get_category_by_id(session: AsyncSession, category_id: uuid.UUID) -> BookCategory | None:
+async def get_category_by_id(session: AsyncSession, category_id: int) -> BookCategory | None:
     result = await session.execute(
         select(BookCategory)
         .where(BookCategory.id == category_id, BookCategory.name.in_(ALLOWED_CATEGORY_NAMES))
@@ -57,7 +55,7 @@ async def update_category(session: AsyncSession, category: BookCategory, name: s
     return category
 
 
-async def count_books_in_category(session: AsyncSession, category_id: uuid.UUID) -> int:
+async def count_books_in_category(session: AsyncSession, category_id: int) -> int:
     count = await session.scalar(
         select(func.count()).select_from(Book).where(Book.category_id == category_id)
     )
@@ -94,21 +92,21 @@ async def seed_book_categories(session_factory) -> None:
 
 
 # Books
-async def list_books_by_category(session: AsyncSession, category_id: uuid.UUID) -> list[Book]:
+async def list_books_by_category(session: AsyncSession, category_id: int) -> list[Book]:
     result = await session.execute(
         select(Book).where(Book.category_id == category_id).order_by(Book.title)
     )
     return list(result.scalars().all())
 
 
-async def get_book_by_id(session: AsyncSession, book_id: uuid.UUID) -> Book | None:
+async def get_book_by_id(session: AsyncSession, book_id: int) -> Book | None:
     result = await session.execute(select(Book).where(Book.id == book_id))
     return result.scalar_one_or_none()
 
 
 async def add_book(
     session: AsyncSession,
-    category_id: uuid.UUID,
+    category_id: int,
     title: str,
     author: str | None = None,
     description: str | None = None,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 
 from aiogram import F, Router
@@ -272,7 +271,7 @@ async def admin_poll_all_view(
         await callback.answer("⛔ Bu amal faqat superadminlar uchun.", show_alert=True)
         return
     try:
-        task_id = uuid.UUID(callback.data.split(":", 1)[1])
+        task_id = int(callback.data.split(":", 1)[1])
     except ValueError:
         await callback.answer("❌ Noto'g'ri topshiriq", show_alert=True)
         return
@@ -459,7 +458,7 @@ async def view_poll_voters_admin(
         return
 
     try:
-        task_id = uuid.UUID(callback.data.split(":", 1)[1])
+        task_id = int(callback.data.split(":", 1)[1])
     except ValueError:
         await callback.answer("❌ Noto'g'ri topshiriq", show_alert=True)
         return
@@ -626,8 +625,8 @@ async def approval_toggle_group(
 
     try:
         _, profile_id_str, group_id_str = callback.data.split(":")
-        profile_id = uuid.UUID(profile_id_str)
-        group_id = uuid.UUID(group_id_str)
+        profile_id = int(profile_id_str)
+        group_id = int(group_id_str)
     except (ValueError, AttributeError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -666,8 +665,8 @@ async def approval_select_school(
 
     try:
         _, profile_id_str, school_id_str = callback.data.split(":")
-        profile_id = uuid.UUID(profile_id_str)
-        school_id = uuid.UUID(school_id_str)
+        profile_id = int(profile_id_str)
+        school_id = int(school_id_str)
     except (ValueError, AttributeError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -725,7 +724,7 @@ async def approval_school_page(
 
     try:
         _, profile_id_str, page_str = callback.data.split(":")
-        profile_id = uuid.UUID(profile_id_str)
+        profile_id = int(profile_id_str)
         page = int(page_str)
     except (ValueError, AttributeError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
@@ -788,7 +787,7 @@ async def approval_confirm(
         return
 
     try:
-        profile_id = uuid.UUID(callback.data.split(":")[1])
+        profile_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -867,7 +866,7 @@ async def pending_approve_start(
         return
 
     try:
-        profile_id = uuid.UUID(callback.data.split(":")[1])
+        profile_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -940,7 +939,7 @@ async def approval_reject_start(
         return
 
     try:
-        profile_id = uuid.UUID(callback.data.split(":")[1])
+        profile_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -978,7 +977,7 @@ async def _perform_reject(
     admin_chat_id = data.get("admin_chat_id")
     admin_message_id = data.get("admin_message_id")
 
-    profile = await get_profile_by_id(session, uuid.UUID(str(profile_id))) if profile_id else None
+    profile = await get_profile_by_id(session, int(profile_id)) if profile_id else None
     if not profile:
         await message.answer("❌ Ro'yxatdan o'tish profili topilmadi.")
         await state.clear()
@@ -1260,7 +1259,7 @@ async def pending_group_select(
 
     try:
         _, group_id_str = callback.data.split(":")
-        group_id = uuid.UUID(group_id_str)
+        group_id = int(group_id_str)
     except (ValueError, AttributeError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -1384,7 +1383,7 @@ async def cmd_add_group_select_school(
         return
 
     try:
-        school_id = uuid.UUID(callback.data.split(":")[1])
+        school_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri maktab.", show_alert=True)
         return
@@ -1486,7 +1485,7 @@ async def cmd_add_group_chat_id(
         session,
         name=data["group_name"],
         chat_id=chat_id,
-        school_id=uuid.UUID(raw_school_id) if raw_school_id else None,
+        school_id=int(raw_school_id) if raw_school_id else None,
     )
     await state.clear()
 
@@ -1529,7 +1528,7 @@ async def cmd_edit_group_select(
         return
 
     try:
-        group_id = uuid.UUID(callback.data.split(":")[1])
+        group_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri guruh.", show_alert=True)
         return
@@ -1567,7 +1566,7 @@ async def cmd_edit_group_select_school(
         return
 
     try:
-        school_id = uuid.UUID(callback.data.split(":")[1])
+        school_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri maktab.", show_alert=True)
         return
@@ -1630,7 +1629,7 @@ async def cmd_edit_group_skip_chat_id(
         session: AsyncSession,
 ) -> None:
     data = await state.get_data()
-    group = await get_group_by_id(session, uuid.UUID(data["group_id"]))
+    group = await get_group_by_id(session, int(data["group_id"]))
     if not group:
         await message.answer("❌ Guruh topilmadi.")
         await state.clear()
@@ -1643,7 +1642,7 @@ async def cmd_edit_group_skip_chat_id(
         await show_groups_menu(message, is_superadmin=True)
         return
 
-    await update_group(session, group, name=data.get("new_name"), school_id=uuid.UUID(raw_school_id) if raw_school_id else None)
+    await update_group(session, group, name=data.get("new_name"), school_id=int(raw_school_id) if raw_school_id else None)
     await state.clear()
     await message.answer(f"✅ Guruh yangilandi: {group.name}")
     await show_groups_menu(message, is_superadmin=True)
@@ -1656,7 +1655,7 @@ async def cmd_edit_group_chat_id(
         session: AsyncSession,
 ) -> None:
     data = await state.get_data()
-    group = await get_group_by_id(session, uuid.UUID(data["group_id"]))
+    group = await get_group_by_id(session, int(data["group_id"]))
     if not group:
         await message.answer("❌ Guruh topilmadi.")
         await state.clear()
@@ -1679,7 +1678,7 @@ async def cmd_edit_group_chat_id(
         group,
         name=data.get("new_name"),
         chat_id=chat_id,
-        school_id=uuid.UUID(raw_school_id) if raw_school_id else None,
+        school_id=int(raw_school_id) if raw_school_id else None,
     )
     await state.clear()
     await message.answer(f"✅ Guruh yangilandi: {group.name} ({group.chat_id})")
@@ -1720,7 +1719,7 @@ async def cmd_remove_group_confirm(
         return
 
     try:
-        group_id = uuid.UUID(callback.data.split(":")[1])
+        group_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri guruh.", show_alert=True)
         return
@@ -1790,7 +1789,7 @@ async def process_remove_teacher_selection(
         session: AsyncSession,
 ) -> None:
     """Tanlangan o'qituvchini o'chirish"""
-    teacher_id = uuid.UUID(callback.data.replace("del_teacher_", ""))
+    teacher_id = int(callback.data.replace("del_teacher_", ""))
     logger.info(
         f"O'qituvchini o'chirish so'rovi: teacher_id={teacher_id}",
         extra={"user_id": callback.from_user.id, "chat_id": callback.message.chat.id, "command": "remove_teacher"},

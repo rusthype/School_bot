@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import datetime, timezone
 
 from aiogram.types import InlineKeyboardMarkup
@@ -31,17 +30,17 @@ async def get_redis() -> Redis:
     return _redis
 
 
-def _sel_key(admin_id: uuid.UUID, profile_id: uuid.UUID) -> str:
+def _sel_key(admin_id: int, profile_id: int) -> str:
     return f"approval:selections:{admin_id}:{profile_id}"
 
 
-def _school_key(admin_id: uuid.UUID, profile_id: uuid.UUID) -> str:
+def _school_key(admin_id: int, profile_id: int) -> str:
     return f"approval:school:{admin_id}:{profile_id}"
 
 
 # --------------- selections ---------------
 
-async def get_selected_group_ids(admin_id: uuid.UUID, profile_id: uuid.UUID) -> set[str]:
+async def get_selected_group_ids(admin_id: int, profile_id: int) -> set[str]:
     r = await get_redis()
     raw = await r.get(_sel_key(admin_id, profile_id))
     if raw is None:
@@ -49,7 +48,7 @@ async def get_selected_group_ids(admin_id: uuid.UUID, profile_id: uuid.UUID) -> 
     return set(json.loads(raw))
 
 
-async def toggle_selected_group(admin_id: uuid.UUID, profile_id: uuid.UUID, group_id: uuid.UUID) -> set[str]:
+async def toggle_selected_group(admin_id: int, profile_id: int, group_id: int) -> set[str]:
     key = _sel_key(admin_id, profile_id)
     r = await get_redis()
     raw = await r.get(key)
@@ -63,7 +62,7 @@ async def toggle_selected_group(admin_id: uuid.UUID, profile_id: uuid.UUID, grou
     return set(selected)
 
 
-async def clear_selections_for_profile(profile_id: uuid.UUID) -> None:
+async def clear_selections_for_profile(profile_id: int) -> None:
     """Remove all approval state keys for a given profile (any admin)."""
     r = await get_redis()
     pattern = f"approval:*:*:{profile_id}"
@@ -78,21 +77,21 @@ async def clear_selections_for_profile(profile_id: uuid.UUID) -> None:
 
 # --------------- school selection ---------------
 
-async def set_selected_school(admin_id: uuid.UUID, profile_id: uuid.UUID, school_id: uuid.UUID) -> None:
+async def set_selected_school(admin_id: int, profile_id: int, school_id: int) -> None:
     r = await get_redis()
     await r.set(_school_key(admin_id, profile_id), str(school_id), ex=_APPROVAL_TTL)
 
 
-async def get_selected_school(admin_id: uuid.UUID, profile_id: uuid.UUID) -> uuid.UUID | None:
+async def get_selected_school(admin_id: int, profile_id: int) -> int | None:
     r = await get_redis()
     raw = await r.get(_school_key(admin_id, profile_id))
-    return uuid.UUID(raw) if raw else None
+    return int(raw) if raw else None
 
 
 # --------------- keyboard builders (unchanged logic) ---------------
 
 def build_school_keyboard(
-    profile_id: uuid.UUID,
+    profile_id: int,
     schools: list[School],
     page: int = 1,
     per_page: int = 10,
@@ -125,8 +124,8 @@ def build_school_keyboard(
 
 async def build_approval_keyboard(
     session: AsyncSession,
-    profile_id: uuid.UUID,
-    school_id: uuid.UUID,
+    profile_id: int,
+    school_id: int,
     selected_ids: set[str],
 ) -> InlineKeyboardMarkup:
     from school_bot.bot.services.group_service import list_groups_by_school
@@ -178,7 +177,7 @@ async def notify_superadmins_new_registration(
                 superadmins.append(user)
 
     # Load user for username and telegram id
-    user = await session.get(User, profile.user_id)
+    user = await session.get(User, profile.bot_user_id)
     username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
 

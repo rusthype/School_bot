@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -9,23 +8,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from school_bot.database.models import Profile, User, UserRole
 
 
-async def get_profile_by_user_id(session: AsyncSession, user_id: uuid.UUID) -> Profile | None:
-    result = await session.execute(select(Profile).where(Profile.user_id == user_id))
+async def get_profile_by_user_id(session: AsyncSession, user_id: int) -> Profile | None:
+    result = await session.execute(select(Profile).where(Profile.bot_user_id == user_id))
     return result.scalar_one_or_none()
 
 
-async def get_profile_by_id(session: AsyncSession, profile_id: uuid.UUID) -> Profile | None:
+async def get_profile_by_id(session: AsyncSession, profile_id: int) -> Profile | None:
     result = await session.execute(select(Profile).where(Profile.id == profile_id))
     return result.scalar_one_or_none()
 
 
 async def upsert_profile(
     session: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     first_name: str,
     last_name: str | None,
     phone: str,
-    school_id: uuid.UUID | None = None,
+    school_id: int | None = None,
     profile_type: str = "teacher",
 ) -> Profile:
     profile = await get_profile_by_user_id(session, user_id)
@@ -50,7 +49,7 @@ async def upsert_profile(
         return profile
 
     profile = Profile(
-        user_id=user_id,
+        bot_user_id=user_id,
         first_name=first_name,
         last_name=last_name,
         phone=phone,
@@ -68,12 +67,12 @@ async def upsert_profile(
 
 async def upsert_student_profile(
     session: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     first_name: str,
     last_name: str | None,
     phone: str,
     class_name: str | None,
-    school_id: uuid.UUID | None = None,
+    school_id: int | None = None,
 ) -> Profile:
     profile = await get_profile_by_user_id(session, user_id)
 
@@ -95,7 +94,7 @@ async def upsert_student_profile(
         return profile
 
     profile = Profile(
-        user_id=user_id,
+        bot_user_id=user_id,
         first_name=first_name,
         last_name=last_name,
         phone=phone,
@@ -116,9 +115,9 @@ async def upsert_student_profile(
 async def approve_profile(
     session: AsyncSession,
     profile: Profile,
-    approved_by_user_id: uuid.UUID,
+    approved_by_user_id: int,
     assigned_groups: list[str],
-    school_id: uuid.UUID | None = None,
+    school_id: int | None = None,
 ) -> Profile:
     profile.is_approved = True
     profile.assigned_groups = assigned_groups
@@ -130,7 +129,7 @@ async def approve_profile(
     if school_id is not None:
         profile.school_id = school_id
 
-    user = await session.get(User, profile.user_id)
+    user = await session.get(User, profile.bot_user_id)
     if user and user.role not in (UserRole.superadmin, UserRole.librarian):
         user.role = UserRole.teacher
 
@@ -139,7 +138,7 @@ async def approve_profile(
     return profile
 
 
-async def revoke_teacher(session: AsyncSession, user_id: uuid.UUID) -> bool:
+async def revoke_teacher(session: AsyncSession, user_id: int) -> bool:
     profile = await get_profile_by_user_id(session, user_id)
     user = await session.get(User, user_id)
 
@@ -163,7 +162,7 @@ async def revoke_teacher(session: AsyncSession, user_id: uuid.UUID) -> bool:
 
 
 async def reject_profile(session: AsyncSession, profile: Profile) -> None:
-    user = await session.get(User, profile.user_id)
+    user = await session.get(User, profile.bot_user_id)
     if user and user.role == UserRole.teacher:
         user.role = None
 

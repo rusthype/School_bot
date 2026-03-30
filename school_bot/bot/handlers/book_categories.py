@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import uuid
 
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
@@ -171,7 +170,7 @@ async def cmd_edit_category(
         return
 
     try:
-        category_id = uuid.UUID(parts[0])
+        category_id = int(parts[0])
     except ValueError:
         await message.answer("Ishlatilishi: /edit_category [id] [yangi_nom]")
         return
@@ -207,7 +206,7 @@ async def cmd_remove_category(
         return
 
     try:
-        category_id = uuid.UUID(command.args.strip())
+        category_id = int(command.args.strip())
     except ValueError:
         await message.answer("Ishlatilishi: /remove_category [id]")
         return

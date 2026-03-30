@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from html import escape
 from datetime import datetime
 from pathlib import Path
@@ -79,7 +78,7 @@ async def _send_cart_cover_previews(
     for book_id_str, qty in cart.items():
         if qty < 1 or sent >= limit:
             continue
-        book = await get_book_by_id(session, uuid.UUID(book_id_str))
+        book = await get_book_by_id(session, int(book_id_str))
         if not book or not book.cover_image:
             continue
         path = Path(book.cover_image)
@@ -231,7 +230,7 @@ async def _render_cart(
     for book_id_str, qty in cart.items():
         if qty < 1:
             continue
-        book = await get_book_by_id(session, uuid.UUID(book_id_str))
+        book = await get_book_by_id(session, int(book_id_str))
         if not book:
             continue
         items.append((book.title, qty))
@@ -389,7 +388,7 @@ async def select_book_category(
         return
 
     try:
-        category_id = uuid.UUID(callback.data.split(":")[1])
+        category_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -421,7 +420,7 @@ async def select_book_category(
 @router.callback_query(lambda c: c.data.startswith("cart_add:"))
 async def cart_add_book(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     try:
-        book_id = uuid.UUID(callback.data.split(":")[1])
+        book_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -435,7 +434,7 @@ async def cart_add_book(callback: CallbackQuery, state: FSMContext, session: Asy
     if not raw_category_id:
         await callback.answer("❌ Kategoriya tanlanmagan.", show_alert=True)
         return
-    category_id = uuid.UUID(str(raw_category_id))
+    category_id = int(raw_category_id)
 
     await state.update_data(cart=cart)
     view = data.get("view")
@@ -443,7 +442,7 @@ async def cart_add_book(callback: CallbackQuery, state: FSMContext, session: Asy
         index = int(data.get("book_index") or 0)
         book_ids = data.get("book_ids") or []
         if book_ids and 0 <= index < len(book_ids):
-            book = await get_book_by_id(session, uuid.UUID(book_ids[index]))
+            book = await get_book_by_id(session, int(book_ids[index]))
             if book:
                 await _show_book_detail(
                     callback.message,
@@ -464,7 +463,7 @@ async def cart_add_book(callback: CallbackQuery, state: FSMContext, session: Asy
 @router.callback_query(lambda c: c.data.startswith("cart_remove:"))
 async def cart_remove_book(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     try:
-        book_id = uuid.UUID(callback.data.split(":")[1])
+        book_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -481,7 +480,7 @@ async def cart_remove_book(callback: CallbackQuery, state: FSMContext, session: 
     if not raw_category_id:
         await callback.answer("❌ Kategoriya tanlanmagan.", show_alert=True)
         return
-    category_id = uuid.UUID(str(raw_category_id))
+    category_id = int(raw_category_id)
 
     await state.update_data(cart=cart)
     view = data.get("view")
@@ -489,7 +488,7 @@ async def cart_remove_book(callback: CallbackQuery, state: FSMContext, session: 
         index = int(data.get("book_index") or 0)
         book_ids = data.get("book_ids") or []
         if book_ids and 0 <= index < len(book_ids):
-            book = await get_book_by_id(session, uuid.UUID(book_ids[index]))
+            book = await get_book_by_id(session, int(book_ids[index]))
             if book:
                 await _show_book_detail(
                     callback.message,
@@ -551,14 +550,14 @@ async def cart_back(callback: CallbackQuery, state: FSMContext, session: AsyncSe
     if not raw_category_id:
         await callback.answer("❌ Kategoriya tanlanmagan.", show_alert=True)
         return
-    category_id = uuid.UUID(str(raw_category_id))
+    category_id = int(raw_category_id)
 
     await state.set_state(BookOrderStates.shopping_cart)
     await state.update_data(view="detail")
     index = int(data.get("book_index") or 0)
     book_ids = data.get("book_ids") or []
     if book_ids and 0 <= index < len(book_ids):
-        book = await get_book_by_id(session, uuid.UUID(book_ids[index]))
+        book = await get_book_by_id(session, int(book_ids[index]))
         if book:
             await _show_book_detail(callback.message, session, book, category_id, cart, index, len(book_ids))
             await callback.answer()
@@ -588,7 +587,7 @@ async def cart_back_to_categories(callback: CallbackQuery, state: FSMContext, se
 async def book_page_navigate(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     try:
         _, category_str, index_str = callback.data.split(":")
-        category_id = uuid.UUID(category_str)
+        category_id = int(category_str)
         index = int(index_str)
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri sahifa.", show_alert=True)
@@ -608,7 +607,7 @@ async def book_page_navigate(callback: CallbackQuery, state: FSMContext, session
         return
 
     index = max(0, min(index, len(book_ids) - 1))
-    book = await get_book_by_id(session, uuid.UUID(book_ids[index]))
+    book = await get_book_by_id(session, int(book_ids[index]))
     if not book:
         await callback.answer("❌ Kitob topilmadi.", show_alert=True)
         return
@@ -701,7 +700,7 @@ async def cart_set_priority(
     item_lines: list[str] = []
     total = 0
     for book_id_str, qty in items:
-        book = await get_book_by_id(session, uuid.UUID(book_id_str))
+        book = await get_book_by_id(session, int(book_id_str))
         if not book:
             continue
         item_lines.append(f"• {book.title} - {qty} dona")
@@ -747,7 +746,7 @@ async def _finalize_order(
     order = await create_book_order(
         session=session,
         teacher_id=db_user.id,
-        items=[(uuid.UUID(bid), qty) for bid, qty in items],
+        items=[(int(bid), qty) for bid, qty in items],
         notes=None,
         priority=priority,
     )
@@ -766,11 +765,11 @@ async def _finalize_order(
         groups_text = ", ".join(profile.assigned_groups)
 
     category_id = data.get("category_id")
-    category = await get_category_by_id(session, uuid.UUID(str(category_id))) if category_id else None
+    category = await get_category_by_id(session, int(category_id)) if category_id else None
 
     item_lines: list[str] = []
     for book_id_str, qty in items:
-        book = await get_book_by_id(session, uuid.UUID(book_id_str))
+        book = await get_book_by_id(session, int(book_id_str))
         if book:
             item_lines.append(f"   • {book.title} - {qty} dona")
 

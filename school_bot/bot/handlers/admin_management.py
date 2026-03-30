@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from aiogram import Router, F
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -315,7 +314,7 @@ async def admin_remove_select(callback: CallbackQuery, session: AsyncSession, is
         await callback.answer()
         return
 
-    admin_id = uuid.UUID(callback.data.split(":")[2])
+    admin_id = int(callback.data.split(":")[2])
     admin = await session.get(User, admin_id)
     if not admin:
         await callback.answer("❌ Admin topilmadi.", show_alert=True)
@@ -358,7 +357,7 @@ async def admin_remove_confirm(callback: CallbackQuery, session: AsyncSession, i
         await callback.answer()
         return
 
-    admin_id = uuid.UUID(callback.data.split(":")[2])
+    admin_id = int(callback.data.split(":")[2])
     admin = await session.get(User, admin_id)
     if not admin:
         await callback.answer("❌ Admin topilmadi.", show_alert=True)
@@ -513,7 +512,7 @@ async def admin_role_select(
         await callback.answer("❌ Foydalanuvchi topilmadi.", show_alert=True)
         return
 
-    user = await session.get(User, uuid.UUID(str(target_user_id)))
+    user = await session.get(User, int(target_user_id))
     if not user:
         await callback.answer("❌ Foydalanuvchi topilmadi.", show_alert=True)
         return

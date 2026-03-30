@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from school_bot.database.models import Task
@@ -9,7 +7,7 @@ from school_bot.database.models import Task
 
 async def create_task(
     session: AsyncSession,
-    teacher_id: uuid.UUID,
+    teacher_id: int,
     topic: str,
     description: str,
     poll_message_id: int | None,

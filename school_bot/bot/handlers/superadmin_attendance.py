@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
@@ -303,7 +302,7 @@ async def set_school_location_pick(
         return
 
     try:
-        school_id = uuid.UUID(callback.data.split(":")[1])
+        school_id = int(callback.data.split(":")[1])
     except (IndexError, ValueError):
         await callback.answer("❌ Noto'g'ri maktab.", show_alert=True)
         return
@@ -378,7 +377,7 @@ async def set_school_radius_input(
     try:
         school = await set_school_location(
             session=session,
-            school_id=uuid.UUID(str(school_id)),
+            school_id=int(school_id),
             latitude=float(latitude),
             longitude=float(longitude),
             radius_m=radius_m,
@@ -505,7 +504,7 @@ async def attendance_school_select(
         return
 
     try:
-        school_id = uuid.UUID(callback.data.split(":")[1])
+        school_id = int(callback.data.split(":")[1])
     except (IndexError, ValueError):
         await callback.answer("❌ Noto'g'ri maktab.", show_alert=True)
         return
@@ -530,7 +529,7 @@ async def attendance_school_page(
         return
 
     try:
-        school_id = uuid.UUID(parts[1])
+        school_id = int(parts[1])
         page = int(parts[2])
     except ValueError:
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
