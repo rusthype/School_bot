@@ -66,7 +66,7 @@ class Task(Base):
     __tablename__ = "bot_tasks"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    teacher_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    teacher_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False, index=True)
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     poll_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
@@ -92,11 +92,11 @@ class PollVote(Base):
     poll_message_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     poll_id: Mapped[str] = mapped_column(Text, index=True)
     task_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"),
+        PG_UUID(as_uuid=True), ForeignKey("bot_tasks.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id", ondelete="CASCADE"), index=True)
     option_id: Mapped[int] = mapped_column(Integer, index=True)
     option_text: Mapped[str] = mapped_column(Text)
     voted_at: Mapped[datetime] = mapped_column(
@@ -125,7 +125,7 @@ class Book(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     category_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("book_categories.id", ondelete="CASCADE"),
+        PG_UUID(as_uuid=True), ForeignKey("bot_book_categories.id", ondelete="CASCADE"),
         index=True,
     )
     title: Mapped[str] = mapped_column(Text, nullable=False, index=True)
@@ -144,8 +144,8 @@ class BookOrder(Base):
     __table_args__ = (Index("ix_bot_orders_status_created", "status", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    teacher_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    librarian_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    teacher_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    librarian_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id"), nullable=True)
     status: Mapped[str] = mapped_column(Text, default="pending", index=True)
     priority: Mapped[str] = mapped_column(Text, default="normal", index=True)
     updated_at: Mapped[datetime | None] = mapped_column(
@@ -153,7 +153,7 @@ class BookOrder(Base):
         nullable=True,
         index=True,
     )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id"), nullable=True, index=True)
     delivery_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     delivery_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
@@ -166,7 +166,7 @@ class BookOrder(Base):
         nullable=True,
         index=True,
     )
-    delivered_by: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+    delivered_by: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id"), nullable=True, index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -191,8 +191,8 @@ class BookOrderItem(Base):
     __tablename__ = "bot_book_order_items"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    order_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("book_orders.id", ondelete="CASCADE"))
-    book_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("books.id", ondelete="CASCADE"))
+    order_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_book_orders.id", ondelete="CASCADE"))
+    book_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_books.id", ondelete="CASCADE"))
     quantity: Mapped[int] = mapped_column(Integer, default=1)
 
     order: Mapped[BookOrder] = relationship(back_populates="items")
@@ -203,10 +203,10 @@ class OrderStatusHistory(Base):
     __tablename__ = "bot_order_status_history"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    order_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("book_orders.id", ondelete="CASCADE"), index=True)
+    order_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_book_orders.id", ondelete="CASCADE"), index=True)
     old_status: Mapped[str] = mapped_column(String(50))
     new_status: Mapped[str] = mapped_column(String(50), index=True)
-    changed_by: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), index=True)
+    changed_by: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id"), index=True)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -219,11 +219,11 @@ class SupportTicket(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ticket_number: Mapped[int] = mapped_column(Integer, unique=True, index=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False, index=True)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, default="open", index=True)
     admin_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
-    replied_by: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    replied_by: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -239,7 +239,7 @@ class Profile(Base):
     __tablename__ = "bot_profiles"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id", ondelete="CASCADE"), unique=True, index=True)
     first_name: Mapped[str] = mapped_column(Text, nullable=False)
     last_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     phone: Mapped[str] = mapped_column(Text, nullable=False)
@@ -254,9 +254,9 @@ class Profile(Base):
         index=True,
     )
     is_approved: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
-    approved_by: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    school_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("schools.id"), nullable=True, index=True)
+    school_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_schools.id"), nullable=True, index=True)
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -286,8 +286,8 @@ class TeacherAttendance(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    teacher_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    school_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
+    teacher_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    school_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("bot_schools.id", ondelete="CASCADE"), nullable=False, index=True)
     action: Mapped[str] = mapped_column(
         Enum("check_in", "check_out", name="attendance_action"),
         nullable=False,
@@ -315,7 +315,7 @@ class Group(Base):
     invite_link: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     school_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("schools.id", ondelete="SET NULL"),
+        PG_UUID(as_uuid=True), ForeignKey("bot_schools.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
