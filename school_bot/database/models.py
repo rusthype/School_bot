@@ -48,12 +48,14 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
+        nullable=False,
         index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     tasks: Mapped[list["Task"]] = relationship(back_populates="teacher", cascade="all,delete-orphan")
@@ -77,12 +79,14 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
+        nullable=False,
         index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     teacher: Mapped[User] = relationship(back_populates="tasks")
@@ -110,12 +114,14 @@ class PollVote(Base):
     voted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
+        nullable=False,
         index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     user: Mapped[User] = relationship()
@@ -128,11 +134,12 @@ class BookCategory(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
     display_order: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     books: Mapped[list["Book"]] = relationship(back_populates="category", cascade="all,delete-orphan")
@@ -151,11 +158,12 @@ class Book(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     cover_image: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_available: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     category: Mapped[BookCategory] = relationship(back_populates="books")
@@ -174,6 +182,7 @@ class BookOrder(Base):
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+        onupdate=func.now(),
         index=True,
     )
     updated_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True, index=True)
@@ -194,6 +203,7 @@ class BookOrder(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
+        nullable=False,
         index=True,
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -217,11 +227,12 @@ class BookOrderItem(Base):
     order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_book_orders.id", ondelete="CASCADE"))
     book_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_books.id", ondelete="CASCADE"))
     quantity: Mapped[int] = mapped_column(Integer, default=1)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     order: Mapped[BookOrder] = relationship(back_populates="items")
@@ -236,12 +247,13 @@ class OrderStatusHistory(Base):
     old_status: Mapped[str] = mapped_column(String(50))
     new_status: Mapped[str] = mapped_column(String(50), index=True)
     changed_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_users.id"), index=True)
-    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     order: Mapped[BookOrder] = relationship(back_populates="status_history")
@@ -261,6 +273,7 @@ class SupportTicket(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
+        nullable=False,
         index=True,
     )
     replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -268,6 +281,7 @@ class SupportTicket(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     user: Mapped[User] = relationship(foreign_keys=[user_id])
@@ -299,11 +313,12 @@ class Profile(Base):
     school_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_schools.id"), nullable=True, index=True)
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     user: Mapped[User] = relationship(back_populates="profile", foreign_keys=[bot_user_id])
@@ -320,11 +335,12 @@ class School(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     radius_m: Mapped[int] = mapped_column(Integer, default=150, server_default="150")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
 
@@ -351,11 +367,12 @@ class TeacherAttendance(Base):
     distance_m: Mapped[int] = mapped_column(Integer, nullable=False)
     is_inside: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
     attendance_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
 
     teacher: Mapped[User] = relationship(foreign_keys=[teacher_id])
@@ -375,11 +392,12 @@ class Group(Base):
         nullable=True,
         index=True,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
     school: Mapped[Optional["School"]] = relationship()
 
@@ -412,9 +430,10 @@ class BotSettings(Base):
 
     data_retention_days: Mapped[int] = mapped_column(Integer, default=365, server_default="365")
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
     )
