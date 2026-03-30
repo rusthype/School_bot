@@ -185,7 +185,7 @@ class BookOrder(Base):
         onupdate=func.now(),
         index=True,
     )
-    updated_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True, index=True)
+    updated_by_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True, index=True)
     delivery_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     delivery_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
