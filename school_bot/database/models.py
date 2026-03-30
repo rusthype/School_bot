@@ -210,8 +210,8 @@ class BookOrder(Base):
 
     teacher: Mapped[User] = relationship(foreign_keys=[teacher_id])
     librarian: Mapped[User | None] = relationship(foreign_keys=[librarian_id])
-    deliverer: Mapped[User | None] = relationship(foreign_keys=[delivered_by])
-    admin: Mapped[User | None] = relationship(foreign_keys=[updated_by])
+    deliverer: Mapped[User | None] = relationship(foreign_keys=[delivered_by_id])
+    admin: Mapped[User | None] = relationship(foreign_keys=[updated_by_id])
     items: Mapped[list["BookOrderItem"]] = relationship(back_populates="order", cascade="all,delete-orphan")
     status_history: Mapped[list["OrderStatusHistory"]] = relationship(
         back_populates="order",
