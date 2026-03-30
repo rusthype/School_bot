@@ -117,7 +117,7 @@ async def _send_teachers_page(target: Message, session: AsyncSession, page: int,
 
     result = await session.execute(
         select(User, Profile, School)
-        .join(Profile, User.id == Profile.user_id)
+        .join(Profile, User.id == Profile.bot_user_id)
         .outerjoin(School, Profile.school_id == School.id)
         .where(User.role == UserRole.teacher)
         .order_by(User.created_at)
@@ -419,7 +419,7 @@ async def cmd_pending_approvals(
     )
 
     for profile in pending:
-        user = await session.get(User, profile.user_id)
+        user = await session.get(User, profile.bot_user_id)
         username = f"@{user.username}" if user and user.username else "(username yo'q)"
         full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
         requested = profile.registered_at or datetime.now(timezone.utc)
@@ -685,7 +685,7 @@ async def approval_select_school(
         await callback.answer(_STALE_APPROVAL_MSG, show_alert=True)
         return
 
-    user = await session.get(User, profile.user_id)
+    user = await session.get(User, profile.bot_user_id)
     username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
 
@@ -739,7 +739,7 @@ async def approval_school_page(
         await callback.answer(_STALE_APPROVAL_MSG, show_alert=True)
         return
 
-    user = await session.get(User, profile.user_id)
+    user = await session.get(User, profile.bot_user_id)
     username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
 
@@ -823,7 +823,7 @@ async def approval_confirm(
     await approve_profile(session, profile, db_user.id, assigned_names, school_id=school_id)
     await clear_selections_for_profile(profile_id)
 
-    user = await session.get(User, profile.user_id)
+    user = await session.get(User, profile.bot_user_id)
     if user:
         assigned_str = ", ".join(assigned_names)
         await callback.bot.send_message(
@@ -886,7 +886,7 @@ async def pending_approve_start(
 
     await clear_selections_for_profile(profile_id)
 
-    user = await session.get(User, profile.user_id)
+    user = await session.get(User, profile.bot_user_id)
     username = f"@{user.username}" if user and user.username else "(foydalanuvchi nomi yo'q)"
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
     requested = profile.registered_at or datetime.now(timezone.utc)
@@ -983,7 +983,7 @@ async def _perform_reject(
         await state.clear()
         return
 
-    user = await session.get(User, profile.user_id)
+    user = await session.get(User, profile.bot_user_id)
     full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
 
     await reject_profile(session, profile)
@@ -2031,7 +2031,7 @@ async def cmd_stats(
             School.name.label("school_name"),
             func.count(Task.id).label("task_count"),
         )
-        .join(Profile, User.id == Profile.user_id)
+        .join(Profile, User.id == Profile.bot_user_id)
         .join(Task, User.id == Task.teacher_id)
         .outerjoin(School, Profile.school_id == School.id)
         .where(User.role == UserRole.teacher)

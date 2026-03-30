@@ -248,7 +248,7 @@ async def create_teacher_subjects_chart(session: AsyncSession) -> io.BytesIO | N
     teachers = result.scalars().all()
 
     for teacher in teachers:
-        profile_result = await session.execute(select(Profile).where(Profile.user_id == teacher.id))
+        profile_result = await session.execute(select(Profile).where(Profile.bot_user_id == teacher.id))
         profile = profile_result.scalar_one_or_none()
         if not profile:
             continue

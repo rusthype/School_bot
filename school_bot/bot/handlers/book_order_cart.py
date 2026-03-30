@@ -754,7 +754,7 @@ async def _finalize_order(
     school_name = "Noma'lum"
     groups_text = ""
     profile_result = await session.execute(
-        select(Profile).where(Profile.user_id == db_user.id)
+        select(Profile).where(Profile.bot_user_id == db_user.id)
     )
     profile = profile_result.scalar_one_or_none()
     if profile and profile.school_id:

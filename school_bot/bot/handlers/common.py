@@ -1333,7 +1333,7 @@ async def search_query_handler(
     like_q = f"%{query}%"
     result = await session.execute(
         select(User, Profile)
-        .outerjoin(Profile, User.id == Profile.user_id)
+        .outerjoin(Profile, User.id == Profile.bot_user_id)
         .where(
             (User.full_name.ilike(like_q)) | (Profile.phone.ilike(like_q))
         )
@@ -1556,7 +1556,7 @@ async def teacher_student_list(
         return
     result = await session.execute(
         select(User, Profile)
-        .join(Profile, User.id == Profile.user_id)
+        .join(Profile, User.id == Profile.bot_user_id)
         .where(Profile.profile_type == "student")
         .order_by(Profile.first_name)
         .limit(50)

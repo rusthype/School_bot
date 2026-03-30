@@ -52,7 +52,7 @@ async def _resolve_teacher_context(session: AsyncSession, teacher: User | None) 
 
     school_name = "Noma'lum"
     class_name = "-"
-    profile_result = await session.execute(select(Profile).where(Profile.user_id == teacher.id))
+    profile_result = await session.execute(select(Profile).where(Profile.bot_user_id == teacher.id))
     profile = profile_result.scalar_one_or_none()
     if profile:
         if profile.school_id:
