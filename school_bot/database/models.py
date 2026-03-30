@@ -198,7 +198,7 @@ class BookOrder(Base):
         nullable=True,
         index=True,
     )
-    delivered_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True, index=True)
+    delivered_by_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True, index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
