@@ -62,7 +62,7 @@ class UserContextMiddleware(BaseMiddleware):
         )
 
         # Profilni olish (registratsiya/approval uchun)
-        result = await session.execute(select(Profile).where(Profile.user_id == db_user.id))
+        result = await session.execute(select(Profile).where(Profile.bot_user_id == db_user.id))
         profile = result.scalar_one_or_none()
 
         # Superadmin tekshirish
