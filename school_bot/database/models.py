@@ -246,7 +246,7 @@ class OrderStatusHistory(Base):
     order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_book_orders.id", ondelete="CASCADE"), index=True)
     old_status: Mapped[str] = mapped_column(String(50))
     new_status: Mapped[str] = mapped_column(String(50), index=True)
-    changed_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_users.id"), index=True)
+    changed_by_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_users.id"), index=True)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=func.now(), nullable=False, index=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -257,7 +257,7 @@ class OrderStatusHistory(Base):
     )
 
     order: Mapped[BookOrder] = relationship(back_populates="status_history")
-    user: Mapped[User] = relationship(foreign_keys=[changed_by])
+    user: Mapped[User] = relationship(foreign_keys=[changed_by_id])
 
 
 class SupportTicket(Base):
@@ -269,7 +269,7 @@ class SupportTicket(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, default="open", index=True)
     admin_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
-    replied_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True)
+    replied_by_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -285,7 +285,7 @@ class SupportTicket(Base):
     )
 
     user: Mapped[User] = relationship(foreign_keys=[user_id])
-    admin: Mapped[User | None] = relationship(foreign_keys=[replied_by])
+    admin: Mapped[User | None] = relationship(foreign_keys=[replied_by_id])
 
 
 class Profile(Base):
@@ -308,7 +308,7 @@ class Profile(Base):
         index=True,
     )
     is_approved: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
-    approved_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True)
+    approved_by_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     school_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_schools.id"), nullable=True, index=True)
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -322,7 +322,7 @@ class Profile(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="profile", foreign_keys=[bot_user_id])
-    approved_by_user: Mapped[User | None] = relationship(foreign_keys=[approved_by])
+    approved_by_user: Mapped[User | None] = relationship(foreign_keys=[approved_by_id])
     school: Mapped[Optional["School"]] = relationship()
 
 
