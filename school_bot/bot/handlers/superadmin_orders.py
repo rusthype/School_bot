@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 from datetime import datetime, timezone
 from aiogram import Router
 from aiogram.filters import Command
@@ -97,7 +98,7 @@ async def admin_view_order(
         await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
         return
     try:
-        order_id = int(callback.data.split(":")[1])
+        order_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -167,7 +168,7 @@ async def admin_change_status(
         return
     try:
         _, order_id_str, new_status = callback.data.split(":")
-        order_id = int(order_id_str)
+        order_id = uuid.UUID(order_id_str)
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -211,7 +212,7 @@ async def admin_status_comment(
     comment = (message.text or "").strip()
     if comment == "/skip":
         comment = None
-    order = await session.get(BookOrder, int(order_id))
+    order = await session.get(BookOrder, uuid.UUID(str(order_id)) if not isinstance(order_id, uuid.UUID) else order_id)
     if not order:
         await message.answer("❌ Buyurtma topilmadi.")
         await state.clear()
@@ -246,7 +247,7 @@ async def admin_status_comment(
 async def _notify_teacher_status_change(
     bot,
     teacher_chat_id: int,
-    order_id: int,
+    order_id: uuid.UUID,
     old_status: str,
     new_status: str,
     comment: str | None = None,
@@ -270,7 +271,7 @@ async def admin_order_history(
         await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
         return
     try:
-        order_id = int(callback.data.split(":")[1])
+        order_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return

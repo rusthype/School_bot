@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import Iterable
 
@@ -53,7 +54,7 @@ async def list_pending_groups(session: AsyncSession) -> list[Group]:
         raise
 
 
-async def get_group_by_id(session: AsyncSession, group_id: int) -> Group | None:
+async def get_group_by_id(session: AsyncSession, group_id: uuid.UUID) -> Group | None:
     result = await session.execute(select(Group).where(Group.id == group_id))
     return result.scalar_one_or_none()
 
@@ -85,7 +86,7 @@ async def get_groups_by_names(session: AsyncSession, names: Iterable[str]) -> li
     return list(result.scalars().all())
 
 
-async def list_groups_by_school(session: AsyncSession, school_id: int) -> list[Group]:
+async def list_groups_by_school(session: AsyncSession, school_id: uuid.UUID) -> list[Group]:
     result = await _execute_with_status_fallback(
         session,
         select(Group)
@@ -104,7 +105,7 @@ async def add_group(
     name: str,
     chat_id: int,
     invite_link: str | None = None,
-    school_id: int | None = None,
+    school_id: uuid.UUID | None = None,
     status: str = "active",
 ) -> Group:
     group = Group(
@@ -126,7 +127,7 @@ async def update_group(
     name: str | None = None,
     chat_id: int | None = None,
     invite_link: str | None = None,
-    school_id: int | None = None,
+    school_id: uuid.UUID | None = None,
     status: str | None = None,
 ) -> Group:
     if name is not None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 import html
 import os
 import time
+import uuid
 from datetime import datetime
 
 from aiogram import F, Router
@@ -132,7 +133,7 @@ async def process_group_selection(
     is_superadmin: bool = False,
 ):
     try:
-        group_id = int(callback.data.split(":")[1])
+        group_id = uuid.UUID(callback.data.split(":")[1])
     except ValueError:
         await callback.answer("❌ Guruh topilmadi!")
         return
@@ -542,7 +543,7 @@ async def cmd_poll_voters(
         return
 
     try:
-        task_id = int(args)
+        task_id = uuid.UUID(args)
     except ValueError:
         await message.answer("❌ Noto'g'ri format. Iltimos, topshiriq ID sini kiriting.")
         return
@@ -563,7 +564,7 @@ async def poll_voters_callback(
         return
 
     try:
-        task_id = int(callback.data.split(":", 1)[1])
+        task_id = uuid.UUID(callback.data.split(":", 1)[1])
     except ValueError:
         await callback.answer("❌ Noto'g'ri ID", show_alert=True)
         return
@@ -619,8 +620,8 @@ def format_poll_voters(task: Task) -> str:
 async def show_poll_voters(
     message: Message,
     session: AsyncSession,
-    task_id: int,
-    teacher_id: int,
+    task_id: uuid.UUID,
+    teacher_id: uuid.UUID,
     is_superadmin: bool = False,
 ) -> None:
     stmt = (

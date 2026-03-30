@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -8,23 +9,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from school_bot.database.models import Profile, User, UserRole
 
 
-async def get_profile_by_user_id(session: AsyncSession, user_id: int) -> Profile | None:
+async def get_profile_by_user_id(session: AsyncSession, user_id: uuid.UUID) -> Profile | None:
     result = await session.execute(select(Profile).where(Profile.user_id == user_id))
     return result.scalar_one_or_none()
 
 
-async def get_profile_by_id(session: AsyncSession, profile_id: int) -> Profile | None:
+async def get_profile_by_id(session: AsyncSession, profile_id: uuid.UUID) -> Profile | None:
     result = await session.execute(select(Profile).where(Profile.id == profile_id))
     return result.scalar_one_or_none()
 
 
 async def upsert_profile(
     session: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     first_name: str,
     last_name: str | None,
     phone: str,
-    school_id: int | None = None,
+    school_id: uuid.UUID | None = None,
     profile_type: str = "teacher",
 ) -> Profile:
     profile = await get_profile_by_user_id(session, user_id)
@@ -67,12 +68,12 @@ async def upsert_profile(
 
 async def upsert_student_profile(
     session: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     first_name: str,
     last_name: str | None,
     phone: str,
     class_name: str | None,
-    school_id: int | None = None,
+    school_id: uuid.UUID | None = None,
 ) -> Profile:
     profile = await get_profile_by_user_id(session, user_id)
 
@@ -115,9 +116,9 @@ async def upsert_student_profile(
 async def approve_profile(
     session: AsyncSession,
     profile: Profile,
-    approved_by_user_id: int,
+    approved_by_user_id: uuid.UUID,
     assigned_groups: list[str],
-    school_id: int | None = None,
+    school_id: uuid.UUID | None = None,
 ) -> Profile:
     profile.is_approved = True
     profile.assigned_groups = assigned_groups
@@ -138,7 +139,7 @@ async def approve_profile(
     return profile
 
 
-async def revoke_teacher(session: AsyncSession, user_id: int) -> bool:
+async def revoke_teacher(session: AsyncSession, user_id: uuid.UUID) -> bool:
     profile = await get_profile_by_user_id(session, user_id)
     user = await session.get(User, user_id)
 

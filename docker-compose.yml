@@ -2,20 +2,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
-  postgres:
-    image: postgres:15
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-school_bot_db}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d school_bot_db"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+    networks:
+      - internal
   bot:
     build: .
     restart: unless-stopped
@@ -23,15 +11,22 @@ services:
       - .env
     environment:
       PYTHONPATH: /app
+      ALOCHI_DB_URL: ${ALOCHI_DB_URL}
     working_dir: /app
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_started
     volumes:
       - ./logs:/app/logs
       - ./photos:/app/photos
       - ./covers:/app/covers
-volumes:
-  postgres_data:
+    networks:
+      - internal
+      - alochi
+
+networks:
+  internal:
+    driver: bridge
+  alochi:
+    external: true
+    name: infrastructure_default

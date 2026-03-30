@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from aiogram import Router, F
@@ -54,7 +55,7 @@ def _priority_icon(priority: str | None) -> str:
 async def _notify_teacher_status_change(
     bot,
     teacher_id: int,
-    order_id: int,
+    order_id: uuid.UUID,
     old_status: str,
     new_status: str,
     comment: str | None = None,
@@ -73,7 +74,7 @@ async def _notify_teacher_status_change(
         logger.error("Teacherga status xabari yuborilmadi", exc_info=True)
 
 
-async def _build_order_lines(session: AsyncSession, order_id: int) -> list[str]:
+async def _build_order_lines(session: AsyncSession, order_id: uuid.UUID) -> list[str]:
     items = await list_order_items(session, order_id)
     lines: list[str] = []
     for item in items:
@@ -205,7 +206,7 @@ async def set_delivery_date_start(
         return
 
     try:
-        order_id = int(callback.data.split(":")[1])
+        order_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -229,7 +230,7 @@ async def processing_order_callback(
         return
 
     try:
-        order_id = int(callback.data.split(":")[1])
+        order_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -292,7 +293,7 @@ async def set_delivery_date_submit(
         await message.answer("❌ Sana formati noto'g'ri. Masalan: 15.03.2026")
         return
 
-    order = await get_book_order_by_id(session, int(order_id))
+    order = await get_book_order_by_id(session, uuid.UUID(str(order_id)) if not isinstance(order_id, uuid.UUID) else order_id)
     if not order:
         await message.answer("❌ Buyurtma topilmadi.")
         await state.clear()
@@ -316,7 +317,7 @@ async def confirm_order_callback(
         return
 
     try:
-        order_id = int(callback.data.split(":")[1])
+        order_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -365,7 +366,7 @@ async def reject_order_callback(
         return
 
     try:
-        order_id = int(callback.data.split(":")[1])
+        order_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -414,7 +415,7 @@ async def deliver_order_callback(
         return
 
     try:
-        order_id = int(callback.data.split(":")[1])
+        order_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
@@ -487,13 +488,20 @@ async def cmd_set_delivery(
         return
 
     if len(parts) == 1:
+        try:
+            order_id_val = uuid.UUID(parts[0])
+        except ValueError:
+            await message.answer("❌ Order ID noto'g'ri.")
+            return
         await state.set_state(DeliveryDateStates.waiting_date)
-        await state.update_data(order_id=int(parts[0]))
+        await state.update_data(order_id=str(order_id_val))
         await message.answer("📅 Yetkazish sanasini kiriting (KK.OO.YYYY):")
         return
     if len(parts) >= 2:
         order_id_str, date_str = parts[0], parts[1]
-        if not order_id_str.isdigit():
+        try:
+            order_id_val = uuid.UUID(order_id_str)
+        except ValueError:
             await message.answer("❌ Order ID noto'g'ri.")
             return
         try:
@@ -502,7 +510,7 @@ async def cmd_set_delivery(
             await message.answer("❌ Sana formati noto'g'ri. Masalan: 15.03.2026")
             return
 
-        order = await get_book_order_by_id(session, int(order_id_str))
+        order = await get_book_order_by_id(session, order_id_val)
         if not order:
             await message.answer("❌ Buyurtma topilmadi.")
             return
@@ -525,11 +533,15 @@ async def cmd_confirm_order(
         await message.answer("⛔ Bu komanda faqat kutubxonachilar uchun.")
         return
 
-    if not command.args or not command.args.strip().isdigit():
+    if not command.args or not command.args.strip():
         await message.answer("Ishlatilishi: /confirm_order [order_id]")
         return
 
-    order_id = int(command.args.strip())
+    try:
+        order_id = uuid.UUID(command.args.strip())
+    except ValueError:
+        await message.answer("❌ Noto'g'ri order ID.")
+        return
     order = await get_book_order_by_id(session, order_id)
     if not order:
         await message.answer("❌ Buyurtma topilmadi.")
@@ -599,11 +611,15 @@ async def cmd_mark_done(
         await message.answer("⛔ Bu komanda faqat kutubxonachilar uchun.")
         return
 
-    if not command.args or not command.args.strip().isdigit():
+    if not command.args or not command.args.strip():
         await message.answer("Ishlatilishi: /mark_done [order_id]")
         return
 
-    order_id = int(command.args.strip())
+    try:
+        order_id = uuid.UUID(command.args.strip())
+    except ValueError:
+        await message.answer("❌ Noto'g'ri order ID.")
+        return
     order = await get_book_order_by_id(session, order_id)
     if not order:
         await message.answer("❌ Buyurtma topilmadi.")

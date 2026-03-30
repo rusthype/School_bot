@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import tarfile
+import uuid
 from pathlib import Path
 from typing import Union
 from aiogram import Router, F
@@ -604,7 +605,7 @@ async def registration_school_select(
     if not school:
         await callback.answer("❌ Maktab topilmadi", show_alert=True)
         return
-    await state.update_data(school_id=school.id)
+    await state.update_data(school_id=str(school.id))
     await state.set_state(RegistrationStates.phone)
     await callback.message.edit_text(
         f"🏫 Tanlangan maktab: {school.name}\n\n📱 Telefon raqamingizni yuboring:")
@@ -639,7 +640,8 @@ async def registration_phone_contact(
     data = await state.get_data()
     first_name = data.get("first_name", "")
     last_name = data.get("last_name", "")
-    school_id = data.get("school_id")
+    raw_school_id = data.get("school_id")
+    school_id = uuid.UUID(str(raw_school_id)) if raw_school_id else None
     school_name = "Tanlanmagan"
     if school_id:
         school = await session.get(School, school_id)
@@ -685,7 +687,8 @@ async def registration_confirm(
     first_name = data.get("first_name")
     last_name = data.get("last_name")
     phone = data.get("phone")
-    school_id = data.get("school_id")
+    raw_school_id = data.get("school_id")
+    school_id = uuid.UUID(str(raw_school_id)) if raw_school_id else None
     reg_type = data.get("reg_type", "teacher")
     if not (first_name and phone):
         await callback.answer("❌ Ma'lumotlar to'liq emas", show_alert=True)
@@ -1242,7 +1245,7 @@ async def teacher_books_category_select(
         await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
         return
     try:
-        category_id = int(callback.data.split(":", 1)[1])
+        category_id = uuid.UUID(callback.data.split(":", 1)[1])
     except ValueError:
         await callback.answer("❌ Noto'g'ri tanlov", show_alert=True)
         return
@@ -1464,7 +1467,7 @@ async def add_student_school_select(
     if not school:
         await callback.answer("❌ Maktab topilmadi", show_alert=True)
         return
-    await state.update_data(student_school_id=school.id)
+    await state.update_data(student_school_id=str(school.id))
     await state.set_state(AddStudentStates.class_group)
     await callback.message.edit_text(
         f"Maktab: {school.name}\n\nSinf nomini kiriting (masalan: 3-A):"
@@ -1511,7 +1514,8 @@ async def add_student_class_group(
     first_name = data.get("student_first_name", "")
     last_name = data.get("student_last_name", "")
     phone = data.get("student_phone", "")
-    school_id = data.get("student_school_id")
+    raw_school_id = data.get("student_school_id")
+    school_id = uuid.UUID(str(raw_school_id)) if raw_school_id else None
     # Create a placeholder user for the student (no telegram_id yet)
     # We use upsert_student_profile approach but need a user row
     # Since this is a manual add, we create user with telegram_id=0 + random offset
@@ -2060,7 +2064,7 @@ async def confirm_delete_school(
         await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
         return
     try:
-        school_id = int(callback.data.split(":")[1])
+        school_id = uuid.UUID(callback.data.split(":")[1])
     except Exception:
         await callback.answer("❌ Noto'g'ri so'rov", show_alert=True)
         return
@@ -2087,7 +2091,7 @@ async def delete_school(
         await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
         return
     try:
-        school_id = int(callback.data.split(":")[1])
+        school_id = uuid.UUID(callback.data.split(":")[1])
     except Exception:
         await callback.answer("❌ Noto'g'ri so'rov", show_alert=True)
         return
@@ -2320,7 +2324,7 @@ async def admin_backup(message: Message, is_superadmin: bool = False) -> None:
     loading = await message.answer("⏳ Backup tayyorlanmoqda...")
     try:
         settings = Settings()
-        url = make_url(settings.database_url)
+        url = make_url(settings.alochi_db_url)
         db_name = url.database
         db_user = url.username or ""
         db_password = url.password or ""
@@ -2785,7 +2789,7 @@ async def process_remove_teacher_selection(
         session: AsyncSession,
 ) -> None:
     """Tanlangan o'qituvchini o'chirish"""
-    teacher_id = int(callback.data.replace("common_del_teacher_", ""))
+    teacher_id = uuid.UUID(callback.data.replace("common_del_teacher_", ""))
     logger.info(
         "O'qituvchini o'chirish so'rovi",
         extra={"user_id": callback.from_user.id, "chat_id": callback.message.chat.id, "command": "remove_teacher", "target_id": teacher_id},
@@ -2897,7 +2901,7 @@ async def confirm_delete_user(
         await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
         return
     try:
-        user_id = int(callback.data.split(":", 1)[1])
+        user_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri foydalanuvchi", show_alert=True)
         return
@@ -2935,7 +2939,7 @@ async def execute_delete_user(
         await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
         return
     try:
-        user_id = int(callback.data.split(":", 1)[1])
+        user_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri foydalanuvchi", show_alert=True)
         return

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from aiogram import Router, F
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
@@ -188,7 +189,7 @@ async def _send_book_cover_previews(message: Message, books: list, limit: int = 
 async def _show_predefined_book_picker(
     message: Message,
     state: FSMContext,
-    category_id: int,
+    category_id: uuid.UUID,
     category_name: str,
 ) -> None:
     await state.update_data(category_id=category_id, category_name=category_name)
@@ -222,7 +223,7 @@ async def _show_edit_categories(message: Message, categories: list, edit: bool =
 async def _show_edit_books(
     message: Message,
     session: AsyncSession,
-    category_id: int,
+    category_id: uuid.UUID,
     category_name: str,
     edit: bool = True,
 ) -> None:
@@ -297,7 +298,7 @@ async def _show_delete_categories(message: Message, categories: list, edit: bool
 async def _show_delete_books(
     message: Message,
     session: AsyncSession,
-    category_id: int,
+    category_id: uuid.UUID,
     category_name: str,
     edit: bool = True,
 ) -> None:
@@ -364,7 +365,7 @@ async def add_book_select_category(
     session: AsyncSession,
 ) -> None:
     try:
-        category_id = int(callback.data.split(":")[1])
+        category_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -463,7 +464,7 @@ async def cmd_list_books_start(
         return
 
     if command and command.args and command.args.strip().isdigit():
-        category_id = int(command.args.strip())
+        category_id = uuid.UUID(command.args.strip())
         await _render_category_books(message, session, category_id)
         return
 
@@ -473,7 +474,7 @@ async def cmd_list_books_start(
 async def _render_category_books(
     message: Message,
     session: AsyncSession,
-    category_id: int,
+    category_id: uuid.UUID,
     as_edit: bool = False,
 ) -> None:
     category = await get_category_by_id(session, category_id)
@@ -617,7 +618,7 @@ async def list_books_by_category_callback(
     session: AsyncSession,
 ) -> None:
     try:
-        category_id = int(callback.data.split(":")[1])
+        category_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -693,7 +694,7 @@ async def add_book_from_category(
         await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
         return
     try:
-        category_id = int(callback.data.split(":")[1])
+        category_id = uuid.UUID(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -723,7 +724,7 @@ async def list_edit_hint(
         await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
         return
     try:
-        category_id = int(callback.data.split(":", 1)[1])
+        category_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -748,7 +749,7 @@ async def list_remove_hint(
         await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
         return
     try:
-        category_id = int(callback.data.split(":", 1)[1])
+        category_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -802,7 +803,7 @@ async def confirm_add_book(
         await callback.answer("❌ Ma'lumotlar yetarli emas.", show_alert=True)
         return
 
-    book = await add_book(session, int(category_id), title, None, None, cover_image)
+    book = await add_book(session, uuid.UUID(str(category_id)), title, None, None, cover_image)
     category_name = data.get("category_name", "Noma'lum")
     await callback.message.edit_text(
         f"✅ Kitob qo'shildi.\n"
@@ -864,7 +865,7 @@ async def delete_book_select_category(
     session: AsyncSession,
 ) -> None:
     try:
-        category_id = int(callback.data.split(":", 1)[1])
+        category_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -902,7 +903,7 @@ async def delete_book_confirm(
     session: AsyncSession,
 ) -> None:
     try:
-        book_id = int(callback.data.split(":", 1)[1])
+        book_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -943,7 +944,7 @@ async def delete_book_execute(
         await callback.answer("Qaytadan urinib ko'ring.", show_alert=True)
         return
 
-    book = await get_book_by_id(session, int(book_id))
+    book = await get_book_by_id(session, uuid.UUID(str(book_id)))
     if book:
         await remove_book(session, book)
         await callback.message.edit_text(f"✅ Kitob o'chirildi: {book_title}")
@@ -954,7 +955,7 @@ async def delete_book_execute(
     category_name = data.get("delete_category_name") or "Noma'lum"
     await state.set_state(BookDeleteStates.select_book)
     if category_id:
-        await _show_delete_books(callback.message, session, int(category_id), category_name, edit=False)
+        await _show_delete_books(callback.message, session, uuid.UUID(str(category_id)), category_name, edit=False)
     await callback.answer()
 
 
@@ -969,7 +970,7 @@ async def delete_book_cancel_confirm(
     category_name = data.get("delete_category_name") or "Noma'lum"
     await state.set_state(BookDeleteStates.select_book)
     if category_id:
-        await _show_delete_books(callback.message, session, int(category_id), category_name, edit=False)
+        await _show_delete_books(callback.message, session, uuid.UUID(str(category_id)), category_name, edit=False)
     await callback.answer("Bekor qilindi.")
 
 
@@ -999,7 +1000,7 @@ async def edit_book_select_category(
     session: AsyncSession,
 ) -> None:
     try:
-        category_id = int(callback.data.split(":", 1)[1])
+        category_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -1037,7 +1038,7 @@ async def edit_book_select_book(
     session: AsyncSession,
 ) -> None:
     try:
-        book_id = int(callback.data.split(":", 1)[1])
+        book_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -1066,7 +1067,7 @@ async def edit_book_back_to_books(
         await callback.answer("❌ Kategoriya topilmadi.", show_alert=True)
         return
     await state.set_state(BookEditStates.select_book)
-    await _show_edit_books(callback.message, session, int(category_id), category_name, edit=True)
+    await _show_edit_books(callback.message, session, uuid.UUID(str(category_id)), category_name, edit=True)
     await callback.answer()
 
 
@@ -1139,7 +1140,7 @@ async def edit_book_back_to_fields(
     if not book_id:
         await callback.answer("❌ Kitob topilmadi.", show_alert=True)
         return
-    book = await get_book_by_id(session, int(book_id))
+    book = await get_book_by_id(session, uuid.UUID(str(book_id)))
     if not book:
         await callback.answer("❌ Kitob topilmadi.", show_alert=True)
         return
@@ -1155,7 +1156,7 @@ async def edit_book_update_category(
     session: AsyncSession,
 ) -> None:
     try:
-        new_category_id = int(callback.data.split(":", 1)[1])
+        new_category_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -1166,7 +1167,7 @@ async def edit_book_update_category(
         await callback.answer("❌ Kitob topilmadi.", show_alert=True)
         return
 
-    book = await get_book_by_id(session, int(book_id))
+    book = await get_book_by_id(session, uuid.UUID(str(book_id)))
     if not book:
         await callback.answer("❌ Kitob topilmadi.", show_alert=True)
         return
@@ -1223,7 +1224,7 @@ async def edit_book_value_text(
             category_name = data.get("edit_category_name") or "Noma'lum"
             await state.set_state(BookEditStates.select_book)
             if category_id:
-                await _show_edit_books(message, session, int(category_id), category_name, edit=False)
+                await _show_edit_books(message, session, uuid.UUID(str(category_id)), category_name, edit=False)
             return
 
         await message.answer("❌ Iltimos, rasm yuboring yoki ⏭️ O'tkazib yuborish tugmasini bosing.")
@@ -1256,7 +1257,7 @@ async def edit_book_value_photo(
         await message.answer("Qaytadan urinib ko'ring.")
         return
 
-    book = await get_book_by_id(session, int(book_id))
+    book = await get_book_by_id(session, uuid.UUID(str(book_id)))
     if not book:
         await message.answer("❌ Kitob topilmadi.")
         await state.clear()
@@ -1269,7 +1270,7 @@ async def edit_book_value_photo(
     category_name = data.get("edit_category_name") or "Noma'lum"
     await state.set_state(BookEditStates.select_book)
     if category_id:
-        await _show_edit_books(message, session, int(category_id), category_name, edit=False)
+        await _show_edit_books(message, session, uuid.UUID(str(category_id)), category_name, edit=False)
 
 
 @router.callback_query(lambda c: c.data.startswith("editbook_remove:"))
@@ -1279,7 +1280,7 @@ async def edit_book_remove(
     session: AsyncSession,
 ) -> None:
     try:
-        book_id = int(callback.data.split(":", 1)[1])
+        book_id = uuid.UUID(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
         return
@@ -1295,7 +1296,7 @@ async def edit_book_remove(
     category_id = data.get("edit_category_id")
     category_name = data.get("edit_category_name") or "Noma'lum"
     if category_id:
-        await _show_edit_books(callback.message, session, int(category_id), category_name, edit=True)
+        await _show_edit_books(callback.message, session, uuid.UUID(str(category_id)), category_name, edit=True)
     await callback.answer("✅ Kitob o'chirildi.")
 
 
@@ -1409,7 +1410,7 @@ async def edit_book_availability_skip(
         await state.clear()
         return
 
-    book = await get_book_by_id(session, int(book_id))
+    book = await get_book_by_id(session, uuid.UUID(str(book_id)))
     if not book:
         await message.answer("❌ Kitob topilmadi.")
         await state.clear()
@@ -1447,7 +1448,7 @@ async def edit_book_availability(
         await state.clear()
         return
 
-    book = await get_book_by_id(session, int(book_id))
+    book = await get_book_by_id(session, uuid.UUID(str(book_id)))
     if not book:
         await message.answer("❌ Kitob topilmadi.")
         await state.clear()

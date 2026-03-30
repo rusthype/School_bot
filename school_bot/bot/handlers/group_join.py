@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from aiogram import Router
@@ -207,7 +208,7 @@ async def group_join_select_school(callback: CallbackQuery, session: AsyncSessio
     try:
         _, chat_id_str, school_id_str, _page = callback.data.split(":")
         chat_id = int(chat_id_str)
-        school_id = int(school_id_str)
+        school_id = uuid.UUID(school_id_str)
     except (ValueError, AttributeError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return

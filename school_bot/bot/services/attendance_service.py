@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -34,7 +35,7 @@ def tashkent_today() -> date:
 
 async def set_school_location(
     session: AsyncSession,
-    school_id: int,
+    school_id: uuid.UUID,
     latitude: float,
     longitude: float,
     radius_m: int,
@@ -51,7 +52,7 @@ async def set_school_location(
     return school
 
 
-async def _get_teacher_school(session: AsyncSession, teacher_user_id: int) -> School:
+async def _get_teacher_school(session: AsyncSession, teacher_user_id: uuid.UUID) -> School:
     profile = await get_profile_by_user_id(session, teacher_user_id)
     if not profile or not profile.school_id:
         raise AttendanceServiceError("Sizga maktab biriktirilmagan.")
@@ -70,7 +71,7 @@ async def _get_teacher_school(session: AsyncSession, teacher_user_id: int) -> Sc
 
 async def _has_action_today(
     session: AsyncSession,
-    teacher_user_id: int,
+    teacher_user_id: uuid.UUID,
     action: str,
     day: date,
 ) -> bool:
@@ -88,7 +89,7 @@ async def _has_action_today(
 
 async def create_teacher_attendance(
     session: AsyncSession,
-    teacher_user_id: int,
+    teacher_user_id: uuid.UUID,
     action: str,
     teacher_lat: float,
     teacher_lon: float,
@@ -143,7 +144,7 @@ async def list_attendance(
     page: int = 1,
     per_page: int = 20,
     attendance_date: date | None = None,
-    school_id: int | None = None,
+    school_id: uuid.UUID | None = None,
 ) -> tuple[int, list[tuple[TeacherAttendance, User, School]]]:
     filters = []
     if attendance_date is not None:

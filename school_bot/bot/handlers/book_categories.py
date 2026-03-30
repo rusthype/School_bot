@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
@@ -142,8 +143,8 @@ async def cmd_list_categories(
         return
 
     lines = ["📚 **Kategoriyalar ro'yxati:**", ""]
-    for category in categories:
-        lines.append(f"{category.id}. {category.name}")
+    for i, category in enumerate(categories, 1):
+        lines.append(f"{i}. {category.name} (ID: {category.id})")
 
     keyboard = get_main_keyboard(is_superadmin=True, is_teacher=False)
     await message.answer("\n".join(lines), reply_markup=keyboard)
@@ -165,11 +166,16 @@ async def cmd_edit_category(
         return
 
     parts = command.args.split(maxsplit=1)
-    if len(parts) < 2 or not parts[0].isdigit():
+    if len(parts) < 2:
         await message.answer("Ishlatilishi: /edit_category [id] [yangi_nom]")
         return
 
-    category_id = int(parts[0])
+    try:
+        category_id = uuid.UUID(parts[0])
+    except ValueError:
+        await message.answer("Ishlatilishi: /edit_category [id] [yangi_nom]")
+        return
+
     new_name = parts[1].strip()
     category = await get_category_by_id(session, category_id)
     if not category:
@@ -196,11 +202,16 @@ async def cmd_remove_category(
         await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
         return
 
-    if not command.args or not command.args.strip().isdigit():
+    if not command.args:
         await message.answer("Ishlatilishi: /remove_category [id]")
         return
 
-    category_id = int(command.args.strip())
+    try:
+        category_id = uuid.UUID(command.args.strip())
+    except ValueError:
+        await message.answer("Ishlatilishi: /remove_category [id]")
+        return
+
     category = await get_category_by_id(session, category_id)
     if not category:
         await message.answer("❌ Kategoriya topilmadi.")

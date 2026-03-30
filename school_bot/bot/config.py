@@ -11,7 +11,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     bot_token: str = Field(alias="BOT_TOKEN")
-    database_url: str = Field(alias="DATABASE_URL")
+    alochi_db_url: str = Field(alias="ALOCHI_DB_URL")
+    # DEPRECATED: DATABASE_URL was the old standalone school_bot_db connection.
+    # Kept as optional fallback during transition. Remove after migration is confirmed stable.
+    database_url: str | None = Field(default=None, alias="DATABASE_URL")
 
     superadmin_ids_raw: str = Field(default="", alias="SUPERADMIN_IDS")
     teacher_ids_raw: str = Field(default="", alias="TEACHER_IDS")

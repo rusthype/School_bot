@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
@@ -78,7 +79,7 @@ def _build_school_select_keyboard(schools: list, page: int, mode: str) -> Inline
     return builder
 
 
-def _build_report_nav(mode: str, page: int, total_pages: int, school_id: int | None = None):
+def _build_report_nav(mode: str, page: int, total_pages: int, school_id: uuid.UUID | None = None):
     if total_pages <= 1:
         return None
 
@@ -164,7 +165,7 @@ async def _send_today_report(target: Message, session: AsyncSession, page: int, 
 async def _send_school_report(
     target: Message,
     session: AsyncSession,
-    school_id: int,
+    school_id: uuid.UUID,
     page: int,
     edit: bool = False,
 ) -> None:
@@ -302,7 +303,7 @@ async def set_school_location_pick(
         return
 
     try:
-        school_id = int(callback.data.split(":")[1])
+        school_id = uuid.UUID(callback.data.split(":")[1])
     except (IndexError, ValueError):
         await callback.answer("❌ Noto'g'ri maktab.", show_alert=True)
         return
@@ -312,7 +313,7 @@ async def set_school_location_pick(
         await callback.answer("❌ Maktab topilmadi.", show_alert=True)
         return
 
-    await state.update_data(attendance_school_id=school.id)
+    await state.update_data(attendance_school_id=str(school.id))
     await state.set_state(SuperadminAttendanceStates.waiting_for_school_location)
     await callback.message.answer(
         f"📍 {school.name} uchun lokatsiya yuboring.",
@@ -377,7 +378,7 @@ async def set_school_radius_input(
     try:
         school = await set_school_location(
             session=session,
-            school_id=int(school_id),
+            school_id=uuid.UUID(str(school_id)),
             latitude=float(latitude),
             longitude=float(longitude),
             radius_m=radius_m,
@@ -504,7 +505,7 @@ async def attendance_school_select(
         return
 
     try:
-        school_id = int(callback.data.split(":")[1])
+        school_id = uuid.UUID(callback.data.split(":")[1])
     except (IndexError, ValueError):
         await callback.answer("❌ Noto'g'ri maktab.", show_alert=True)
         return
@@ -529,7 +530,7 @@ async def attendance_school_page(
         return
 
     try:
-        school_id = int(parts[1])
+        school_id = uuid.UUID(parts[1])
         page = int(parts[2])
     except ValueError:
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)

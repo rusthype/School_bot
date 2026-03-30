@@ -28,7 +28,7 @@ def _make_sync_url(url: str) -> str:
 
 def get_url() -> str:
     settings = Settings()
-    return _make_sync_url(settings.database_url)
+    return _make_sync_url(settings.alochi_db_url)
 
 
 def run_migrations_offline() -> None:

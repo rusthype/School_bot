@@ -105,7 +105,7 @@ async def main() -> None:
 
     settings = Settings()
 
-    engine, session_factory = create_session_factory(settings.database_url)
+    engine, session_factory = create_session_factory(settings.alochi_db_url)
     await init_models(engine)
     await seed_superadmins(session_factory=session_factory, superadmin_tg_ids=settings.superadmin_ids)
     await seed_schools(session_factory=session_factory)

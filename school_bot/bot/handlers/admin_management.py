@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from aiogram import Router, F
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -95,7 +96,7 @@ async def _find_user_by_input(
 
 async def _prompt_role_selection(message: Message, user: User, state: FSMContext, mode: str) -> None:
     await state.set_state(AddAdminStates.waiting_for_role)
-    await state.update_data(target_user_id=user.id, target_display=_format_user_display(user), mode=mode)
+    await state.update_data(target_user_id=str(user.id), target_display=_format_user_display(user), mode=mode)
     roles_lines = ["Quyidagi rollardan birini tanlang:", ""]
     for role_key, meta in ADMIN_ROLES.items():
         roles_lines.append(f"{meta['name']} - {meta['desc']}")
@@ -314,7 +315,7 @@ async def admin_remove_select(callback: CallbackQuery, session: AsyncSession, is
         await callback.answer()
         return
 
-    admin_id = int(callback.data.split(":")[2])
+    admin_id = uuid.UUID(callback.data.split(":")[2])
     admin = await session.get(User, admin_id)
     if not admin:
         await callback.answer("❌ Admin topilmadi.", show_alert=True)
@@ -357,7 +358,7 @@ async def admin_remove_confirm(callback: CallbackQuery, session: AsyncSession, i
         await callback.answer()
         return
 
-    admin_id = int(callback.data.split(":")[2])
+    admin_id = uuid.UUID(callback.data.split(":")[2])
     admin = await session.get(User, admin_id)
     if not admin:
         await callback.answer("❌ Admin topilmadi.", show_alert=True)
@@ -472,7 +473,7 @@ async def _process_edit_admin(
         return
 
     await state.set_state(EditAdminRoleStates.waiting_for_role)
-    await state.update_data(target_user_id=user.id, target_display=_format_user_display(user), mode="edit")
+    await state.update_data(target_user_id=str(user.id), target_display=_format_user_display(user), mode="edit")
 
     current_role = _role_label(user.role)
     text = (
@@ -512,7 +513,7 @@ async def admin_role_select(
         await callback.answer("❌ Foydalanuvchi topilmadi.", show_alert=True)
         return
 
-    user = await session.get(User, target_user_id)
+    user = await session.get(User, uuid.UUID(str(target_user_id)))
     if not user:
         await callback.answer("❌ Foydalanuvchi topilmadi.", show_alert=True)
         return

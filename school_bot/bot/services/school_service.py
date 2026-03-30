@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +13,7 @@ async def list_schools(session: AsyncSession) -> list[School]:
     return list(result.scalars().all())
 
 
-async def get_school_by_id(session: AsyncSession, school_id: int) -> School | None:
+async def get_school_by_id(session: AsyncSession, school_id: uuid.UUID) -> School | None:
     result = await session.execute(select(School).where(School.id == school_id))
     return result.scalar_one_or_none()
 
@@ -44,7 +46,7 @@ async def add_school(session: AsyncSession, number: int, name: str | None = None
     return school
 
 
-async def remove_school(session: AsyncSession, school_id: int) -> bool:
+async def remove_school(session: AsyncSession, school_id: uuid.UUID) -> bool:
     school = await get_school_by_id(session, school_id)
     if not school:
         return False

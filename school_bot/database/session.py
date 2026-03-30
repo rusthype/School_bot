@@ -9,6 +9,7 @@ from school_bot.database.base import Base
 
 
 def create_session_factory(database_url: str) -> tuple[AsyncEngine, Callable[[], AsyncSession]]:
+    # Connected to Alochi platform DB (migrated from standalone school_bot_db)
     engine = create_async_engine(
         database_url,
         pool_pre_ping=True,
@@ -37,23 +38,23 @@ END $$;
 """))
 
             await conn.execute(text("""
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active';
+ALTER TABLE bot_groups ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active';
 """))
             await conn.execute(text("""
-UPDATE groups SET status = 'active' WHERE status IS NULL;
+UPDATE bot_groups SET status = 'active' WHERE status IS NULL;
 """))
 
             await conn.execute(text("""
-ALTER TABLE schools ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+ALTER TABLE bot_schools ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
 """))
             await conn.execute(text("""
-ALTER TABLE schools ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+ALTER TABLE bot_schools ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
 """))
             await conn.execute(text("""
-ALTER TABLE schools ADD COLUMN IF NOT EXISTS radius_m INTEGER DEFAULT 150;
+ALTER TABLE bot_schools ADD COLUMN IF NOT EXISTS radius_m INTEGER DEFAULT 150;
 """))
             await conn.execute(text("""
-UPDATE schools SET radius_m = 150 WHERE radius_m IS NULL;
+UPDATE bot_schools SET radius_m = 150 WHERE radius_m IS NULL;
 """))
 
             await conn.execute(text("""
@@ -66,10 +67,10 @@ END $$;
 """))
 
             await conn.execute(text("""
-CREATE TABLE IF NOT EXISTS teacher_attendance (
-    id SERIAL PRIMARY KEY,
-    teacher_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS bot_teacher_attendance (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    teacher_id UUID NOT NULL REFERENCES bot_users(id) ON DELETE CASCADE,
+    school_id UUID NOT NULL REFERENCES bot_schools(id) ON DELETE CASCADE,
     action attendance_action NOT NULL,
     teacher_lat DOUBLE PRECISION NOT NULL,
     teacher_lon DOUBLE PRECISION NOT NULL,
@@ -82,16 +83,16 @@ CREATE TABLE IF NOT EXISTS teacher_attendance (
 );
 """))
             await conn.execute(text("""
-CREATE UNIQUE INDEX IF NOT EXISTS uq_teacher_attendance_daily_action
-ON teacher_attendance (teacher_id, attendance_date, action);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bot_teacher_attendance_daily_action
+ON bot_teacher_attendance (teacher_id, attendance_date, action);
 """))
             await conn.execute(text("""
-CREATE INDEX IF NOT EXISTS ix_teacher_attendance_date
-ON teacher_attendance (attendance_date);
+CREATE INDEX IF NOT EXISTS ix_bot_teacher_attendance_date
+ON bot_teacher_attendance (attendance_date);
 """))
             await conn.execute(text("""
-CREATE INDEX IF NOT EXISTS ix_teacher_attendance_school_date
-ON teacher_attendance (school_id, attendance_date);
+CREATE INDEX IF NOT EXISTS ix_bot_teacher_attendance_school_date
+ON bot_teacher_attendance (school_id, attendance_date);
 """))
 
             await conn.execute(text("""
