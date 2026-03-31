@@ -2314,7 +2314,7 @@ def _build_group_toggle_keyboard(
         mark = "✅" if group.name in selected_set else "☐"
         builder.button(
             text=f"{mark} {group.name}",
-            callback_data=f"teacher_toggle_group:{user_id}:{group.name}",
+            callback_data=f"tg:{user_id}:{group.id}",
         )
     builder.adjust(2)
     builder.row(InlineKeyboardButton(text="💾 Saqlash", callback_data=f"teacher_save_groups:{user_id}"))
@@ -2624,7 +2624,7 @@ async def teacher_set_role(
 
 # ============== TEACHER EDIT — GROUP TOGGLE ==============
 
-@router.callback_query(TeacherEditStates.waiting_groups, lambda c: c.data.startswith("teacher_toggle_group:"))
+@router.callback_query(TeacherEditStates.waiting_groups, lambda c: c.data.startswith("tg:"))
 async def teacher_toggle_group(
     callback: CallbackQuery,
     state: FSMContext,
@@ -2637,10 +2637,17 @@ async def teacher_toggle_group(
     try:
         parts = callback.data.split(":", 2)
         user_id = int(parts[1])
-        group_name = parts[2]
+        group_id = int(parts[2])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
+
+    all_groups = await list_groups(session)
+    group = next((g for g in all_groups if g.id == group_id), None)
+    if not group:
+        await callback.answer("❌ Guruh topilmadi.", show_alert=True)
+        return
+    group_name = group.name
 
     data = await state.get_data()
     pending: list[str] = list(data.get("pending_groups") or [])
