@@ -129,6 +129,7 @@ async def _send_teachers_page(target: Message, session: AsyncSession, page: int,
     )
     teachers_data = result.all()
 
+    teacher_buttons: list[tuple[str, int]] = []
     if not teachers_data:
         result_message = "📭 Hozircha hech qanday o'qituvchi yo'q."
     else:
@@ -147,9 +148,17 @@ async def _send_teachers_page(target: Message, session: AsyncSession, page: int,
             lines.append(f"   🏫 Maktab: {school_name}")
             lines.append(f"   📚 Guruhlar: {groups_text}")
             lines.append("")
+            teacher_buttons.append((full_name, teacher.id))
         result_message = "\n".join(lines).strip()
 
-    keyboard = _build_page_keyboard("teachers_page", page, total_pages)
+    builder = InlineKeyboardBuilder()
+    for label, uid in teacher_buttons:
+        builder.row(InlineKeyboardButton(text=f"✏️ {label}", callback_data=f"teacher_detail_view:{uid}"))
+    page_keyboard = _build_page_keyboard("teachers_page", page, total_pages)
+    if page_keyboard:
+        for row in page_keyboard.inline_keyboard:
+            builder.row(*row)
+    keyboard = builder.as_markup() if teacher_buttons or page_keyboard else None
     if edit:
         await target.edit_text(result_message, reply_markup=keyboard)
     else:
@@ -2359,30 +2368,6 @@ async def _show_teacher_detail(
         await target.edit_text(text, reply_markup=keyboard)
     else:
         await target.answer(text, reply_markup=keyboard)
-
-
-@router.message(Command("teacher_detail"))
-async def cmd_teacher_detail(
-    message: Message,
-    session: AsyncSession,
-    is_superadmin: bool = False,
-) -> None:
-    if not is_superadmin:
-        await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
-        return
-    result = await session.execute(
-        select(User).where(User.role == UserRole.teacher).order_by(User.full_name)
-    )
-    teachers = result.scalars().all()
-    if not teachers:
-        await message.answer("📭 Hech qanday o'qituvchi topilmadi.")
-        return
-    builder = InlineKeyboardBuilder()
-    for t in teachers:
-        display = t.full_name or f"ID: {t.telegram_id}"
-        builder.button(text=f"👨‍🏫 {display}", callback_data=f"teacher_detail_view:{t.id}")
-    builder.adjust(1)
-    await message.answer("👨‍🏫 O'qituvchini tanlang:", reply_markup=builder.as_markup())
 
 
 @router.callback_query(lambda c: c.data.startswith("teacher_detail_view:"))
