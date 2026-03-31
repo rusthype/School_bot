@@ -3140,7 +3140,7 @@ async def teacher_self_edit_start(
     await message.answer(
         f"👤 Joriy ma'lumotlar:\n"
         f"Ism: {profile.first_name}\n"
-        f"Familiya: {profile.last_name or 'Yo\'q'}\n"
+        f"Familiya: {profile.last_name or 'Yoq'}\n"
         f"Telefon: {phone}\n\n"
         "✏️ Qaysi ma'lumotni o'zgartirmoqchisiz?",
         reply_markup=_build_self_edit_field_keyboard(),
