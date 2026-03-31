@@ -2467,9 +2467,9 @@ async def teacher_edit_field_select(
     elif field == "role":
         await state.set_state(TeacherEditStates.waiting_role)
         builder = InlineKeyboardBuilder()
-        builder.button(text="👨‍🏫 O'qituvchi", callback_data=f"teacher_set_role:teacher:{user_id}")  # max: 25+1+19 = 45 bytes
-        builder.button(text="📚 Kutubxonachi", callback_data=f"teacher_set_role:librarian:{user_id}")  # max: 28+1+19 = 48 bytes
-        builder.button(text="👑 Superadmin", callback_data=f"teacher_set_role:superadmin:{user_id}")  # max: 29+1+19 = 49 bytes
+        builder.button(text="👨‍🏫 O'qituvchi", callback_data=f"tsr:t:{user_id}")  # max: 25+1+19 = 45 bytes
+        builder.button(text="📚 Kutubxonachi", callback_data=f"tsr:l:{user_id}")  # max: 28+1+19 = 48 bytes
+        builder.button(text="👑 Superadmin", callback_data=f"tsr:s:{user_id}")  # max: 29+1+19 = 49 bytes
         builder.button(text="❌ Bekor qilish", callback_data=f"te_x:{user_id}")  # max: 5+1+19 = 25 bytes
         builder.adjust(1)
         await callback.message.edit_text(
@@ -2584,7 +2584,7 @@ async def teacher_edit_phone(
     await _show_teacher_detail(message, session, user_id, edit=False)
 
 
-@router.callback_query(TeacherEditStates.waiting_role, lambda c: c.data.startswith("teacher_set_role:"))
+@router.callback_query(TeacherEditStates.waiting_role, lambda c: c.data.startswith("tsr:"))
 async def teacher_set_role(
     callback: CallbackQuery,
     state: FSMContext,
@@ -2602,9 +2602,9 @@ async def teacher_set_role(
         return
 
     role_map = {
-        "teacher": UserRole.teacher,
-        "librarian": UserRole.librarian,
-        "superadmin": UserRole.superadmin,
+        "t": UserRole.teacher,
+        "l": UserRole.librarian,
+        "s": UserRole.superadmin,
     }
     new_role = role_map.get(role_str)
     if not new_role:
