@@ -203,6 +203,21 @@ async def update_teacher_profile(
     return profile
 
 
+async def update_teacher_groups(
+    session: AsyncSession,
+    user_id: int,
+    assigned_groups: list[str],
+) -> Profile | None:
+    """Replace the teacher's assigned_groups list."""
+    profile = await get_profile_by_user_id(session, user_id)
+    if not profile:
+        return None
+    profile.assigned_groups = assigned_groups
+    await session.commit()
+    await session.refresh(profile)
+    return profile
+
+
 async def update_teacher_user(
     session: AsyncSession,
     user_id: int,

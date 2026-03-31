@@ -39,6 +39,7 @@ from school_bot.bot.services.profile_service import (
     revoke_teacher,
     update_teacher_profile,
     update_teacher_user,
+    update_teacher_groups,
 )
 from school_bot.bot.services.approval_service import (
     build_approval_keyboard,
@@ -607,9 +608,13 @@ async def admin_poll_cancel(
 
 
 # Umumiy cancel handler - har qanday admin state dan chiqish uchun
-@router.message(Command("cancel"),
-                StateFilter(AddTeacherStates, RemoveTeacherStates, GroupManagementStates, RejectTeacherStates,
-                            TeacherEditStates))
+@router.message(
+    Command("cancel"),
+    StateFilter(
+        AddTeacherStates, RemoveTeacherStates, GroupManagementStates,
+        RejectTeacherStates, TeacherEditStates,
+    ),
+)
 async def cmd_cancel_admin(message: Message, state: FSMContext, is_superadmin: bool = False) -> None:
     """Admin state laridan chiqish"""
     await cancel_current_action(message, state, is_superadmin=is_superadmin)
@@ -2288,6 +2293,26 @@ def _format_teacher_detail(user: User, profile: Profile | None, school_name: str
     )
 
 
+def _build_group_toggle_keyboard(
+    user_id: int,
+    all_groups: list,
+    selected_names: list[str],
+) -> InlineKeyboardBuilder:
+    """Build a toggle keyboard showing each group with a checkmark if currently selected."""
+    selected_set = set(selected_names)
+    builder = InlineKeyboardBuilder()
+    for group in all_groups:
+        mark = "✅" if group.name in selected_set else "☐"
+        builder.button(
+            text=f"{mark} {group.name}",
+            callback_data=f"teacher_toggle_group:{user_id}:{group.name}",
+        )
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="💾 Saqlash", callback_data=f"teacher_save_groups:{user_id}"))
+    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"teacher_edit_cancel:{user_id}"))
+    return builder
+
+
 def _build_teacher_detail_keyboard(user_id: int) -> InlineKeyboardBuilder:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"teacher_edit_menu:{user_id}"))
@@ -2300,6 +2325,7 @@ def _build_teacher_edit_field_keyboard(user_id: int) -> InlineKeyboardBuilder:
     builder.button(text="✏️ To'liq ism", callback_data=f"teacher_edit_field:full_name:{user_id}")
     builder.button(text="📞 Telefon raqam", callback_data=f"teacher_edit_field:phone:{user_id}")
     builder.button(text="🎭 Rol", callback_data=f"teacher_edit_field:role:{user_id}")
+    builder.button(text="👥 Guruhlar", callback_data=f"teacher_edit_field:groups:{user_id}")
     builder.button(text="❌ Bekor qilish", callback_data=f"teacher_edit_cancel:{user_id}")
     builder.adjust(1)
     return builder
@@ -2465,6 +2491,23 @@ async def teacher_edit_field_select(
             "🎭 Yangi rolni tanlang:",
             reply_markup=builder.as_markup(),
         )
+    elif field == "groups":
+        await state.set_state(TeacherEditStates.waiting_groups)
+        profile = await get_profile_by_user_id(session, user_id)
+        current_groups = list(profile.assigned_groups or []) if profile else []
+        await state.update_data(pending_groups=current_groups)
+        groups = await list_groups(session)
+        if not groups:
+            await callback.message.edit_text(
+                "📭 Hech qanday guruh topilmadi.\n\n/cancel — bekor qilish"
+            )
+            await callback.answer()
+            return
+        keyboard = _build_group_toggle_keyboard(user_id, groups, current_groups).as_markup()
+        await callback.message.edit_text(
+            "👥 Guruhlarga belgi qo'ying yoki olib tashlang, so'ng 💾 Saqlash tugmasini bosing:",
+            reply_markup=keyboard,
+        )
     else:
         await callback.answer("❌ Noma'lum maydon.", show_alert=True)
         return
@@ -2476,6 +2519,7 @@ async def teacher_edit_field_select(
 @router.callback_query(TeacherEditStates.waiting_full_name, lambda c: c.data.startswith("teacher_edit_cancel:"))
 @router.callback_query(TeacherEditStates.waiting_phone, lambda c: c.data.startswith("teacher_edit_cancel:"))
 @router.callback_query(TeacherEditStates.waiting_role, lambda c: c.data.startswith("teacher_edit_cancel:"))
+@router.callback_query(TeacherEditStates.waiting_groups, lambda c: c.data.startswith("teacher_edit_cancel:"))
 async def teacher_edit_cancel_inline(
     callback: CallbackQuery,
     state: FSMContext,
@@ -2591,6 +2635,73 @@ async def teacher_set_role(
     await state.clear()
     await _show_teacher_detail(callback.message, session, user_id, edit=True)
     await callback.answer("✅ Saqlandi.")
+
+
+# ============== TEACHER EDIT — GROUP TOGGLE ==============
+
+@router.callback_query(TeacherEditStates.waiting_groups, lambda c: c.data.startswith("teacher_toggle_group:"))
+async def teacher_toggle_group(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
+        return
+    try:
+        parts = callback.data.split(":", 2)
+        user_id = int(parts[1])
+        group_name = parts[2]
+    except (ValueError, IndexError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    pending: list[str] = list(data.get("pending_groups") or [])
+
+    if group_name in pending:
+        pending.remove(group_name)
+    else:
+        pending.append(group_name)
+
+    await state.update_data(pending_groups=pending)
+
+    groups = await list_groups(session)
+    keyboard = _build_group_toggle_keyboard(user_id, groups, pending).as_markup()
+    await callback.message.edit_reply_markup(reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(TeacherEditStates.waiting_groups, lambda c: c.data.startswith("teacher_save_groups:"))
+async def teacher_save_groups(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
+        return
+    try:
+        user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    pending: list[str] = list(data.get("pending_groups") or [])
+
+    profile = await update_teacher_groups(session, user_id, pending)
+    if not profile:
+        await callback.answer("❌ Profil topilmadi.", show_alert=True)
+        await state.clear()
+        return
+
+    await state.clear()
+    groups_text = ", ".join(pending) if pending else "Yo'q"
+    await callback.answer(f"✅ Saqlandi: {groups_text}", show_alert=False)
+    await _show_teacher_detail(callback.message, session, user_id, edit=True)
 
 
 # ============== STUBS for poll flows (referenced but not yet implemented) ==============

@@ -26,6 +26,7 @@ class TeacherEditStates(StatesGroup):
     waiting_full_name = State()
     waiting_phone = State()
     waiting_role = State()
+    waiting_groups = State()
 
 
 class TeacherSelfEditStates(StatesGroup):
