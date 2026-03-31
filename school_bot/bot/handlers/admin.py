@@ -153,7 +153,7 @@ async def _send_teachers_page(target: Message, session: AsyncSession, page: int,
 
     builder = InlineKeyboardBuilder()
     for label, uid in teacher_buttons:
-        builder.row(InlineKeyboardButton(text=f"✏️ {label}", callback_data=f"teacher_detail_view:{uid}"))
+        builder.row(InlineKeyboardButton(text=f"✏️ {label}", callback_data=f"td:{uid}"))  # max: 3+1+19 = 23 bytes
     page_keyboard = _build_page_keyboard("teachers_page", page, total_pages)
     if page_keyboard:
         for row in page_keyboard.inline_keyboard:
@@ -2317,25 +2317,25 @@ def _build_group_toggle_keyboard(
             callback_data=f"tg:{user_id}:{group.id}",
         )
     builder.adjust(2)
-    builder.row(InlineKeyboardButton(text="💾 Saqlash", callback_data=f"teacher_save_groups:{user_id}"))
-    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"teacher_edit_cancel:{user_id}"))
+    builder.row(InlineKeyboardButton(text="💾 Saqlash", callback_data=f"tg_save:{user_id}"))  # max: 8+1+19 = 28 bytes
+    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"te_x:{user_id}"))  # max: 5+1+19 = 25 bytes
     return builder
 
 
 def _build_teacher_detail_keyboard(user_id: int) -> InlineKeyboardBuilder:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"teacher_edit_menu:{user_id}"))
-    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="teacher_detail_cancel"))
+    builder.row(InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"te_menu:{user_id}"))  # max: 8+1+19 = 28 bytes
+    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="td_x"))  # max: 4 bytes
     return builder
 
 
 def _build_teacher_edit_field_keyboard(user_id: int) -> InlineKeyboardBuilder:
     builder = InlineKeyboardBuilder()
-    builder.button(text="✏️ To'liq ism", callback_data=f"teacher_edit_field:full_name:{user_id}")
-    builder.button(text="📞 Telefon raqam", callback_data=f"teacher_edit_field:phone:{user_id}")
-    builder.button(text="🎭 Rol", callback_data=f"teacher_edit_field:role:{user_id}")
-    builder.button(text="👥 Guruhlar", callback_data=f"teacher_edit_field:groups:{user_id}")
-    builder.button(text="❌ Bekor qilish", callback_data=f"teacher_edit_cancel:{user_id}")
+    builder.button(text="✏️ To'liq ism", callback_data=f"te_f:full_name:{user_id}")  # max: 15+1+19 = 35 bytes
+    builder.button(text="📞 Telefon raqam", callback_data=f"te_f:phone:{user_id}")  # max: 11+1+19 = 31 bytes
+    builder.button(text="🎭 Rol", callback_data=f"te_f:role:{user_id}")  # max: 10+1+19 = 30 bytes
+    builder.button(text="👥 Guruhlar", callback_data=f"te_f:groups:{user_id}")  # max: 12+1+19 = 32 bytes
+    builder.button(text="❌ Bekor qilish", callback_data=f"te_x:{user_id}")  # max: 5+1+19 = 25 bytes
     builder.adjust(1)
     return builder
 
@@ -2370,7 +2370,7 @@ async def _show_teacher_detail(
         await target.answer(text, reply_markup=keyboard)
 
 
-@router.callback_query(lambda c: c.data.startswith("teacher_detail_view:"))
+@router.callback_query(lambda c: c.data.startswith("td:"))
 async def teacher_detail_view(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -2388,7 +2388,7 @@ async def teacher_detail_view(
     await callback.answer()
 
 
-@router.callback_query(lambda c: c.data == "teacher_detail_cancel")
+@router.callback_query(lambda c: c.data == "td_x")
 async def teacher_detail_cancel(
     callback: CallbackQuery,
     state: FSMContext,
@@ -2402,7 +2402,7 @@ async def teacher_detail_cancel(
 
 # ============== TEACHER EDIT — ADMIN SIDE ==============
 
-@router.callback_query(lambda c: c.data.startswith("teacher_edit_menu:"))
+@router.callback_query(lambda c: c.data.startswith("te_menu:"))
 async def teacher_edit_menu(
     callback: CallbackQuery,
     state: FSMContext,
@@ -2435,7 +2435,7 @@ async def teacher_edit_menu(
     await callback.answer()
 
 
-@router.callback_query(TeacherEditStates.choose_field, lambda c: c.data.startswith("teacher_edit_field:"))
+@router.callback_query(TeacherEditStates.choose_field, lambda c: c.data.startswith("te_f:"))
 async def teacher_edit_field_select(
     callback: CallbackQuery,
     state: FSMContext,
@@ -2467,10 +2467,10 @@ async def teacher_edit_field_select(
     elif field == "role":
         await state.set_state(TeacherEditStates.waiting_role)
         builder = InlineKeyboardBuilder()
-        builder.button(text="👨‍🏫 O'qituvchi", callback_data=f"teacher_set_role:teacher:{user_id}")
-        builder.button(text="📚 Kutubxonachi", callback_data=f"teacher_set_role:librarian:{user_id}")
-        builder.button(text="👑 Superadmin", callback_data=f"teacher_set_role:superadmin:{user_id}")
-        builder.button(text="❌ Bekor qilish", callback_data=f"teacher_edit_cancel:{user_id}")
+        builder.button(text="👨‍🏫 O'qituvchi", callback_data=f"teacher_set_role:teacher:{user_id}")  # max: 25+1+19 = 45 bytes
+        builder.button(text="📚 Kutubxonachi", callback_data=f"teacher_set_role:librarian:{user_id}")  # max: 28+1+19 = 48 bytes
+        builder.button(text="👑 Superadmin", callback_data=f"teacher_set_role:superadmin:{user_id}")  # max: 29+1+19 = 49 bytes
+        builder.button(text="❌ Bekor qilish", callback_data=f"te_x:{user_id}")  # max: 5+1+19 = 25 bytes
         builder.adjust(1)
         await callback.message.edit_text(
             "🎭 Yangi rolni tanlang:",
@@ -2500,11 +2500,11 @@ async def teacher_edit_field_select(
     await callback.answer()
 
 
-@router.callback_query(TeacherEditStates.choose_field, lambda c: c.data.startswith("teacher_edit_cancel:"))
-@router.callback_query(TeacherEditStates.waiting_full_name, lambda c: c.data.startswith("teacher_edit_cancel:"))
-@router.callback_query(TeacherEditStates.waiting_phone, lambda c: c.data.startswith("teacher_edit_cancel:"))
-@router.callback_query(TeacherEditStates.waiting_role, lambda c: c.data.startswith("teacher_edit_cancel:"))
-@router.callback_query(TeacherEditStates.waiting_groups, lambda c: c.data.startswith("teacher_edit_cancel:"))
+@router.callback_query(TeacherEditStates.choose_field, lambda c: c.data.startswith("te_x:"))
+@router.callback_query(TeacherEditStates.waiting_full_name, lambda c: c.data.startswith("te_x:"))
+@router.callback_query(TeacherEditStates.waiting_phone, lambda c: c.data.startswith("te_x:"))
+@router.callback_query(TeacherEditStates.waiting_role, lambda c: c.data.startswith("te_x:"))
+@router.callback_query(TeacherEditStates.waiting_groups, lambda c: c.data.startswith("te_x:"))
 async def teacher_edit_cancel_inline(
     callback: CallbackQuery,
     state: FSMContext,
@@ -2665,7 +2665,7 @@ async def teacher_toggle_group(
     await callback.answer()
 
 
-@router.callback_query(TeacherEditStates.waiting_groups, lambda c: c.data.startswith("teacher_save_groups:"))
+@router.callback_query(TeacherEditStates.waiting_groups, lambda c: c.data.startswith("tg_save:"))
 async def teacher_save_groups(
     callback: CallbackQuery,
     state: FSMContext,
