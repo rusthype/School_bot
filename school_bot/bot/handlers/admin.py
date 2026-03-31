@@ -37,6 +37,8 @@ from school_bot.bot.services.profile_service import (
     approve_profile,
     reject_profile,
     revoke_teacher,
+    update_teacher_profile,
+    update_teacher_user,
 )
 from school_bot.bot.services.approval_service import (
     build_approval_keyboard,
@@ -51,7 +53,7 @@ from school_bot.bot.utils.parser import parse_telegram_input
 from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.services.pagination import SchoolPagination
 from school_bot.bot.states.group_management import GroupManagementStates
-from school_bot.bot.states.admin_states import AddTeacherManualStates
+from school_bot.bot.states.admin_states import AddTeacherManualStates, TeacherEditStates
 from school_bot.database.models import User, UserRole, Task, Profile, School, PollVote
 from school_bot.bot.handlers.group_join import _build_group_join_school_keyboard
 from school_bot.bot.handlers.common import (
@@ -606,7 +608,8 @@ async def admin_poll_cancel(
 
 # Umumiy cancel handler - har qanday admin state dan chiqish uchun
 @router.message(Command("cancel"),
-                StateFilter(AddTeacherStates, RemoveTeacherStates, GroupManagementStates, RejectTeacherStates))
+                StateFilter(AddTeacherStates, RemoveTeacherStates, GroupManagementStates, RejectTeacherStates,
+                            TeacherEditStates))
 async def cmd_cancel_admin(message: Message, state: FSMContext, is_superadmin: bool = False) -> None:
     """Admin state laridan chiqish"""
     await cancel_current_action(message, state, is_superadmin=is_superadmin)
@@ -2245,3 +2248,404 @@ async def cmd_list_librarians(
 
     keyboard = get_main_keyboard(is_superadmin=True, is_teacher=False)
     await message.answer("\n".join(lines), reply_markup=keyboard)
+
+
+# ============== TEACHER DETAIL VIEW ==============
+
+import re as _re
+_PHONE_RE = _re.compile(r"^\+998\d{9}$")
+_VALID_ROLES = {
+    UserRole.teacher: "o'qituvchi",
+    UserRole.librarian: "kutubxonachi",
+    UserRole.superadmin: "superadmin",
+}
+
+
+def _format_teacher_detail(user: User, profile: Profile | None, school_name: str) -> str:
+    full_name = user.full_name or "Yo'q"
+    if profile:
+        first = profile.first_name or ""
+        last = profile.last_name or ""
+        profile_name = f"{first} {last}".strip() or "Yo'q"
+        phone = profile.phone or "Yo'q"
+        groups = ", ".join(profile.assigned_groups or []) or "Yo'q"
+    else:
+        profile_name = "Yo'q"
+        phone = "Yo'q"
+        groups = "Yo'q"
+    username = f"@{user.username}" if user.username else "Yo'q"
+    role_display = _VALID_ROLES.get(user.role, str(user.role) if user.role else "Yo'q")
+    return (
+        f"👨‍🏫 O'qituvchi ma'lumotlari\n\n"
+        f"👤 To'liq ism (User): {full_name}\n"
+        f"📛 Ism (Profil): {profile_name}\n"
+        f"🔹 Username: {username}\n"
+        f"🆔 Telegram ID: {user.telegram_id}\n"
+        f"📱 Telefon: {phone}\n"
+        f"🏫 Maktab: {school_name}\n"
+        f"📚 Guruhlar: {groups}\n"
+        f"🎭 Rol: {role_display}"
+    )
+
+
+def _build_teacher_detail_keyboard(user_id: int) -> InlineKeyboardBuilder:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"teacher_edit_menu:{user_id}"))
+    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="teacher_detail_cancel"))
+    return builder
+
+
+def _build_teacher_edit_field_keyboard(user_id: int) -> InlineKeyboardBuilder:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ To'liq ism", callback_data=f"teacher_edit_field:full_name:{user_id}")
+    builder.button(text="📞 Telefon raqam", callback_data=f"teacher_edit_field:phone:{user_id}")
+    builder.button(text="🎭 Rol", callback_data=f"teacher_edit_field:role:{user_id}")
+    builder.button(text="❌ Bekor qilish", callback_data=f"teacher_edit_cancel:{user_id}")
+    builder.adjust(1)
+    return builder
+
+
+async def _show_teacher_detail(
+    target: Message,
+    session: AsyncSession,
+    user_id: int,
+    edit: bool = False,
+) -> None:
+    user = await session.get(User, user_id)
+    if not user or user.role not in (UserRole.teacher, UserRole.librarian, UserRole.superadmin):
+        text = "❌ O'qituvchi topilmadi."
+        if edit:
+            await target.edit_text(text)
+        else:
+            await target.answer(text)
+        return
+
+    profile = await get_profile_by_user_id(session, user_id)
+    school_name = "Biriktirilmagan"
+    if profile and profile.school_id:
+        school = await get_school_by_id(session, profile.school_id)
+        if school:
+            school_name = school.name
+
+    text = _format_teacher_detail(user, profile, school_name)
+    keyboard = _build_teacher_detail_keyboard(user_id).as_markup()
+    if edit:
+        await target.edit_text(text, reply_markup=keyboard)
+    else:
+        await target.answer(text, reply_markup=keyboard)
+
+
+@router.message(Command("teacher_detail"))
+async def cmd_teacher_detail(
+    message: Message,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await message.answer("⛔ Bu komanda faqat superadminlar uchun.")
+        return
+    result = await session.execute(
+        select(User).where(User.role == UserRole.teacher).order_by(User.full_name)
+    )
+    teachers = result.scalars().all()
+    if not teachers:
+        await message.answer("📭 Hech qanday o'qituvchi topilmadi.")
+        return
+    builder = InlineKeyboardBuilder()
+    for t in teachers:
+        display = t.full_name or f"ID: {t.telegram_id}"
+        builder.button(text=f"👨‍🏫 {display}", callback_data=f"teacher_detail_view:{t.id}")
+    builder.adjust(1)
+    await message.answer("👨‍🏫 O'qituvchini tanlang:", reply_markup=builder.as_markup())
+
+
+@router.callback_query(lambda c: c.data.startswith("teacher_detail_view:"))
+async def teacher_detail_view(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
+        return
+    try:
+        user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+    await _show_teacher_detail(callback.message, session, user_id, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "teacher_detail_cancel")
+async def teacher_detail_cancel(
+    callback: CallbackQuery,
+    state: FSMContext,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
+        return
+    await cancel_current_action(callback, state, is_superadmin=True)
+
+
+# ============== TEACHER EDIT — ADMIN SIDE ==============
+
+@router.callback_query(lambda c: c.data.startswith("teacher_edit_menu:"))
+async def teacher_edit_menu(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
+        return
+    try:
+        user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    user = await session.get(User, user_id)
+    if not user or user.role not in (UserRole.teacher, UserRole.librarian, UserRole.superadmin):
+        await callback.answer("❌ O'qituvchi topilmadi.", show_alert=True)
+        return
+
+    await state.set_state(TeacherEditStates.choose_field)
+    await state.update_data(edit_user_id=str(user_id))
+
+    keyboard = _build_teacher_edit_field_keyboard(user_id).as_markup()
+    display = user.full_name or f"ID: {user.telegram_id}"
+    await callback.message.edit_text(
+        f"✏️ {display} uchun tahrirlash maydonini tanlang:",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+@router.callback_query(TeacherEditStates.choose_field, lambda c: c.data.startswith("teacher_edit_field:"))
+async def teacher_edit_field_select(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
+        return
+    try:
+        _, field, user_id_str = callback.data.split(":")
+        user_id = int(user_id_str)
+    except (ValueError, IndexError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    await state.update_data(edit_user_id=str(user_id), edit_field=field)
+
+    if field == "full_name":
+        await state.set_state(TeacherEditStates.waiting_full_name)
+        await callback.message.edit_text(
+            "✏️ Yangi to'liq ismni kiriting (3–100 belgi):\n\n/cancel — bekor qilish"
+        )
+    elif field == "phone":
+        await state.set_state(TeacherEditStates.waiting_phone)
+        await callback.message.edit_text(
+            "📞 Yangi telefon raqamni kiriting (+998XXXXXXXXX):\n\n/cancel — bekor qilish"
+        )
+    elif field == "role":
+        await state.set_state(TeacherEditStates.waiting_role)
+        builder = InlineKeyboardBuilder()
+        builder.button(text="👨‍🏫 O'qituvchi", callback_data=f"teacher_set_role:teacher:{user_id}")
+        builder.button(text="📚 Kutubxonachi", callback_data=f"teacher_set_role:librarian:{user_id}")
+        builder.button(text="👑 Superadmin", callback_data=f"teacher_set_role:superadmin:{user_id}")
+        builder.button(text="❌ Bekor qilish", callback_data=f"teacher_edit_cancel:{user_id}")
+        builder.adjust(1)
+        await callback.message.edit_text(
+            "🎭 Yangi rolni tanlang:",
+            reply_markup=builder.as_markup(),
+        )
+    else:
+        await callback.answer("❌ Noma'lum maydon.", show_alert=True)
+        return
+
+    await callback.answer()
+
+
+@router.callback_query(TeacherEditStates.choose_field, lambda c: c.data.startswith("teacher_edit_cancel:"))
+@router.callback_query(TeacherEditStates.waiting_full_name, lambda c: c.data.startswith("teacher_edit_cancel:"))
+@router.callback_query(TeacherEditStates.waiting_phone, lambda c: c.data.startswith("teacher_edit_cancel:"))
+@router.callback_query(TeacherEditStates.waiting_role, lambda c: c.data.startswith("teacher_edit_cancel:"))
+async def teacher_edit_cancel_inline(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
+        return
+    try:
+        user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await cancel_current_action(callback, state, is_superadmin=True)
+        return
+    await state.clear()
+    await _show_teacher_detail(callback.message, session, user_id, edit=True)
+    await callback.answer()
+
+
+@router.message(TeacherEditStates.waiting_full_name, F.text)
+async def teacher_edit_full_name(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    if message.text and message.text.strip().startswith("/cancel"):
+        await cancel_current_action(message, state, is_superadmin=True)
+        return
+
+    value = (message.text or "").strip()
+    if len(value) < 3 or len(value) > 100:
+        await message.answer("❌ To'liq ism 3 dan 100 gacha belgi bo'lishi kerak. Qayta kiriting:\n\n/cancel — bekor qilish")
+        return
+
+    data = await state.get_data()
+    user_id = int(data["edit_user_id"])
+
+    user = await update_teacher_user(session, user_id, full_name=value)
+    if not user:
+        await message.answer("❌ Foydalanuvchi topilmadi.")
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer("✅ Saqlandi.")
+    await _show_teacher_detail(message, session, user_id, edit=False)
+
+
+@router.message(TeacherEditStates.waiting_phone, F.text)
+async def teacher_edit_phone(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    if message.text and message.text.strip().startswith("/cancel"):
+        await cancel_current_action(message, state, is_superadmin=True)
+        return
+
+    value = (message.text or "").strip()
+    if not _PHONE_RE.match(value):
+        await message.answer(
+            "❌ Noto'g'ri format. +998XXXXXXXXX ko'rinishida kiriting:\n\n/cancel — bekor qilish"
+        )
+        return
+
+    data = await state.get_data()
+    user_id = int(data["edit_user_id"])
+
+    profile = await update_teacher_profile(session, user_id, phone=value)
+    if not profile:
+        await message.answer("❌ Profil topilmadi.")
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer("✅ Saqlandi.")
+    await _show_teacher_detail(message, session, user_id, edit=False)
+
+
+@router.callback_query(TeacherEditStates.waiting_role, lambda c: c.data.startswith("teacher_set_role:"))
+async def teacher_set_role(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
+        return
+    try:
+        _, role_str, user_id_str = callback.data.split(":")
+        user_id = int(user_id_str)
+    except (ValueError, IndexError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    role_map = {
+        "teacher": UserRole.teacher,
+        "librarian": UserRole.librarian,
+        "superadmin": UserRole.superadmin,
+    }
+    new_role = role_map.get(role_str)
+    if not new_role:
+        await callback.answer("❌ Noto'g'ri rol.", show_alert=True)
+        return
+
+    user = await update_teacher_user(session, user_id, role=new_role)
+    if not user:
+        await callback.answer("❌ Foydalanuvchi topilmadi.", show_alert=True)
+        await state.clear()
+        return
+
+    await state.clear()
+    await _show_teacher_detail(callback.message, session, user_id, edit=True)
+    await callback.answer("✅ Saqlandi.")
+
+
+# ============== STUBS for poll flows (referenced but not yet implemented) ==============
+
+async def show_all_teachers_overview(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    edit: bool = False,
+) -> None:
+    """Placeholder: shows paginated teacher list. Used by poll navigation flows."""
+    await _send_teachers_page(message, session, page=1, edit=edit)
+
+
+async def show_teachers_by_school(
+    message: Message,
+    session: AsyncSession,
+    school_id: int,
+    state: FSMContext,
+    edit: bool = False,
+) -> None:
+    """Placeholder: shows teachers filtered by school. Used by poll navigation flows."""
+    total = await session.scalar(
+        select(func.count()).select_from(User).where(User.role == UserRole.teacher)
+    ) or 0
+    result = await session.execute(
+        select(User, Profile, School)
+        .join(Profile, User.id == Profile.bot_user_id)
+        .outerjoin(School, Profile.school_id == School.id)
+        .where(User.role == UserRole.teacher, Profile.school_id == school_id)
+        .order_by(User.full_name)
+        .limit(PAGE_SIZE_TEACHERS)
+    )
+    rows = result.all()
+    if not rows:
+        text = "📭 Bu maktabda o'qituvchi topilmadi."
+        if edit:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
+        return
+
+    school_obj = await get_school_by_id(session, school_id)
+    school_name = school_obj.name if school_obj else f"Maktab {school_id}"
+    lines = [f"👨‍🏫 {school_name} o'qituvchilari", ""]
+    builder = InlineKeyboardBuilder()
+    for t, p, s in rows:
+        display = f"{p.first_name} {p.last_name or ''}".strip() if p else (t.full_name or f"ID:{t.telegram_id}")
+        lines.append(f"• {display}")
+        builder.button(text=display, callback_data=f"admin_poll_teacher:{t.id}")
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="🔙 Ortga", callback_data="admin_poll_back_to_schools"))
+
+    text = "\n".join(lines).strip()
+    if edit:
+        await message.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())

@@ -178,3 +178,46 @@ async def reject_profile(session: AsyncSession, profile: Profile) -> None:
 
 def can_register_again(profile: Profile) -> bool:
     return profile.rejected_at is not None or profile.removed_at is not None
+
+
+async def update_teacher_profile(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    phone: str | None = None,
+) -> Profile | None:
+    """Update Profile fields for a teacher. Only non-None kwargs are applied."""
+    profile = await get_profile_by_user_id(session, user_id)
+    if not profile:
+        return None
+    if first_name is not None:
+        profile.first_name = first_name
+    if last_name is not None:
+        profile.last_name = last_name
+    if phone is not None:
+        profile.phone = phone
+    await session.commit()
+    await session.refresh(profile)
+    return profile
+
+
+async def update_teacher_user(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    full_name: str | None = None,
+    role: "UserRole | None" = None,
+) -> User | None:
+    """Update User fields for a teacher. Only non-None kwargs are applied."""
+    user = await session.get(User, user_id)
+    if not user:
+        return None
+    if full_name is not None:
+        user.full_name = full_name
+    if role is not None:
+        user.role = role
+    await session.commit()
+    await session.refresh(user)
+    return user

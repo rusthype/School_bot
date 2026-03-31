@@ -46,7 +46,9 @@ from school_bot.bot.services.profile_service import (
     can_register_again,
     revoke_teacher,
     get_profile_by_user_id,
+    update_teacher_profile,
 )
+from school_bot.bot.states.admin_states import TeacherSelfEditStates
 from school_bot.bot.services.approval_service import notify_superadmins_new_registration
 from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.services.superadmin_menu_builder import SuperAdminMenuBuilder
@@ -263,6 +265,7 @@ def get_teacher_stats_keyboard() -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True, input_field_placeholder="👇 Menyudan tanlang...")
 def get_teacher_settings_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
+    builder.row(KeyboardButton(text="✏️ Profilni tahrirlash"))
     builder.row(KeyboardButton(text="🔔 Bildirishnomalar"))
     builder.row(KeyboardButton(text="🔒 Maxfiylik"))
     builder.row(KeyboardButton(text="🔙 Orqaga"), KeyboardButton(text="🏠 Bosh menyu"))
@@ -3095,3 +3098,202 @@ async def button_remove_admin(
         return
     from school_bot.bot.handlers.admin_management import cmd_remove_admin
     await cmd_remove_admin(message, state, session, None, is_superadmin)
+
+
+# ============== TEACHER SELF-EDIT ==============
+
+_SELF_PHONE_RE = re.compile(r"^\+998\d{9}$")
+_SELF_NAME_PATTERN = re.compile(r"^[A-Za-zА-Яа-яЎўҚқҲҳЭэ\s'\-]+$")
+
+
+def _build_self_edit_field_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Ism", callback_data="self_edit_field:first_name")
+    builder.button(text="✏️ Familiya", callback_data="self_edit_field:last_name")
+    builder.button(text="📞 Telefon", callback_data="self_edit_field:phone")
+    builder.button(text="❌ Bekor qilish", callback_data="self_edit_cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+@router.message(F.text == "✏️ Profilni tahrirlash")
+async def teacher_self_edit_start(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    db_user,
+    is_teacher: bool = False,
+    is_superadmin: bool = False,
+) -> None:
+    if not (is_teacher or is_superadmin):
+        return
+
+    profile = await get_profile_by_user_id(session, db_user.id)
+    if not profile:
+        await message.answer("❌ Profilingiz topilmadi. Administrator bilan bog'laning.")
+        return
+
+    full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
+    phone = profile.phone or "Yo'q"
+
+    await state.set_state(TeacherSelfEditStates.choose_field)
+    await message.answer(
+        f"👤 Joriy ma'lumotlar:\n"
+        f"Ism: {profile.first_name}\n"
+        f"Familiya: {profile.last_name or 'Yo\'q'}\n"
+        f"Telefon: {phone}\n\n"
+        "✏️ Qaysi ma'lumotni o'zgartirmoqchisiz?",
+        reply_markup=_build_self_edit_field_keyboard(),
+    )
+
+
+@router.callback_query(TeacherSelfEditStates.choose_field, lambda c: c.data.startswith("self_edit_field:"))
+async def teacher_self_edit_field_select(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    try:
+        _, field = callback.data.split(":")
+    except (ValueError, IndexError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    await state.update_data(self_edit_field=field)
+
+    if field == "first_name":
+        await state.set_state(TeacherSelfEditStates.waiting_first_name)
+        await callback.message.edit_text(
+            "✏️ Yangi ismingizni kiriting (2–50 belgi):\n\n/cancel — bekor qilish"
+        )
+    elif field == "last_name":
+        await state.set_state(TeacherSelfEditStates.waiting_last_name)
+        await callback.message.edit_text(
+            "✏️ Yangi familiyangizni kiriting (2–50 belgi):\n\n/cancel — bekor qilish"
+        )
+    elif field == "phone":
+        await state.set_state(TeacherSelfEditStates.waiting_phone)
+        await callback.message.edit_text(
+            "📞 Yangi telefon raqamingizni kiriting (+998XXXXXXXXX):\n\n/cancel — bekor qilish"
+        )
+    else:
+        await callback.answer("❌ Noma'lum maydon.", show_alert=True)
+        return
+
+    await callback.answer()
+
+
+@router.callback_query(
+    lambda c: c.data == "self_edit_cancel",
+    StateFilter(TeacherSelfEditStates),
+)
+async def teacher_self_edit_cancel(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db_user=None,
+    is_teacher: bool = False,
+) -> None:
+    await cancel_current_action(callback, state, is_teacher=is_teacher)
+
+
+@router.message(Command("cancel"), StateFilter(TeacherSelfEditStates))
+async def teacher_self_edit_cmd_cancel(
+    message: Message,
+    state: FSMContext,
+    is_teacher: bool = False,
+) -> None:
+    await cancel_current_action(message, state, is_teacher=is_teacher)
+
+
+@router.message(TeacherSelfEditStates.waiting_first_name, F.text)
+async def teacher_self_edit_first_name(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    db_user,
+) -> None:
+    if message.text and message.text.strip() == "/cancel":
+        await cancel_current_action(message, state, is_teacher=True)
+        return
+
+    value = (message.text or "").strip()
+    if len(value) < 2 or len(value) > 50:
+        await message.answer("❌ Ism 2 dan 50 gacha belgi bo'lishi kerak. Qayta kiriting:\n\n/cancel — bekor qilish")
+        return
+    if not _SELF_NAME_PATTERN.match(value):
+        await message.answer("❌ Ismda faqat harflar, probel, apostrof va tire ishlatish mumkin. Qayta kiriting:\n\n/cancel — bekor qilish")
+        return
+
+    profile = await update_teacher_profile(session, db_user.id, first_name=value)
+    if not profile:
+        await message.answer("❌ Profil topilmadi.")
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer(
+        f"✅ Saqlandi. Yangi ism: {value}",
+        reply_markup=get_teacher_settings_keyboard(),
+    )
+
+
+@router.message(TeacherSelfEditStates.waiting_last_name, F.text)
+async def teacher_self_edit_last_name(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    db_user,
+) -> None:
+    if message.text and message.text.strip() == "/cancel":
+        await cancel_current_action(message, state, is_teacher=True)
+        return
+
+    value = (message.text or "").strip()
+    if len(value) < 2 or len(value) > 50:
+        await message.answer("❌ Familiya 2 dan 50 gacha belgi bo'lishi kerak. Qayta kiriting:\n\n/cancel — bekor qilish")
+        return
+    if not _SELF_NAME_PATTERN.match(value):
+        await message.answer("❌ Familiyada faqat harflar, probel, apostrof va tire ishlatish mumkin. Qayta kiriting:\n\n/cancel — bekor qilish")
+        return
+
+    profile = await update_teacher_profile(session, db_user.id, last_name=value)
+    if not profile:
+        await message.answer("❌ Profil topilmadi.")
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer(
+        f"✅ Saqlandi. Yangi familiya: {value}",
+        reply_markup=get_teacher_settings_keyboard(),
+    )
+
+
+@router.message(TeacherSelfEditStates.waiting_phone, F.text)
+async def teacher_self_edit_phone(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    db_user,
+) -> None:
+    if message.text and message.text.strip() == "/cancel":
+        await cancel_current_action(message, state, is_teacher=True)
+        return
+
+    value = (message.text or "").strip()
+    if not _SELF_PHONE_RE.match(value):
+        await message.answer(
+            "❌ Noto'g'ri format. +998XXXXXXXXX ko'rinishida kiriting:\n\n/cancel — bekor qilish"
+        )
+        return
+
+    profile = await update_teacher_profile(session, db_user.id, phone=value)
+    if not profile:
+        await message.answer("❌ Profil topilmadi.")
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer(
+        f"✅ Saqlandi. Yangi telefon: {value}",
+        reply_markup=get_teacher_settings_keyboard(),
+    )
