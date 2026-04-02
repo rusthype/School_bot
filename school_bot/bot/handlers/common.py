@@ -768,24 +768,15 @@ async def cmd_start(
             is_authorized = True
 
     if not is_authorized:
-        # Teacher registration flow for pending teacher profiles
-        if profile and not profile.is_approved:
+        if profile is not None and profile.is_approved:
+            # Profile submitted and approved but not yet activated — admin has not granted role yet
             await state.clear()
-            await state.set_state(RoleSelectStates.waiting_role)
-            role_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="👨\u200d🏫 O'qituvchi", callback_data="role_select:teacher"),
-                    InlineKeyboardButton(text="👨\u200d👩\u200d👧 Ota-ona", callback_data="role_select:parent"),
-                ],
-                [
-                    InlineKeyboardButton(text="🎓 O'quvchi", callback_data="role_select:student"),
-                ],
-            ])
             await message.answer(
-                "Assalomu alaykum! Botga xush kelibsiz.\n\nIltimos, o'zingizning rolingizni tanlang:",
-                reply_markup=role_keyboard,
+                "⏳ Sizning so'rovingiz ko'rib chiqilmoqda. Iltimos, administrator tasdig'ini kuting.",
+                reply_markup=ReplyKeyboardRemove(),
             )
             return
+        # profile is None OR profile exists but not yet approved — show role selection
         await state.clear()
         await state.set_state(RoleSelectStates.waiting_role)
         role_keyboard = InlineKeyboardMarkup(inline_keyboard=[
