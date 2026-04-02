@@ -1062,9 +1062,8 @@ async def cmd_add_teacher_start(
         await message.answer("⛔ Siz o'qituvchilarni boshqarish huquqiga ega emassiz.")
         return
 
-    await message.answer(
-    await message.answer(
     await state.set_state(AddTeacherStates.waiting_for_input)
+    await message.answer(
         "➕ O'qituvchi Telegram ID sini kiriting:\n\n/cancel — bekor qilish"
     )
 
