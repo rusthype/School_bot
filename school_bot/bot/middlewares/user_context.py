@@ -106,8 +106,10 @@ class UserContextMiddleware(BaseMiddleware):
                     await session.refresh(db_user)
             elif profile.profile_type == "student":
                 is_student = True
-        elif db_user.role == UserRole.teacher and profile is None:
-            # Legacy teacherlar uchun (profil bo'lmasa ham teacher ruxsatini saqlab qolamiz)
+        elif db_user.role == UserRole.teacher and (profile is None or not profile.is_approved):
+            # Legacy teacherlar uchun (profil bo'lmasa yoki tasdiqlanmagan bo'lsa ham
+            # teacher ruxsatini saqlab qolamiz — qayta faollashtirilgan foydalanuvchilar
+            # uchun rolni yo'qotmaslik kerak)
             is_teacher = True
         elif tg_user.id in self._teacher_ids:
             is_teacher = True
