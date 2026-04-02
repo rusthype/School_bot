@@ -880,7 +880,7 @@ _ROLE_LABELS = {
 }
 
 
-@router.callback_query(RoleSelectStates.waiting_role, lambda c: c.data and c.data.startswith("role_select:"))
+@router.callback_query(lambda c: c.data and c.data.startswith("role_select:"))
 async def handle_role_selection(
         callback: CallbackQuery,
         state: FSMContext,
