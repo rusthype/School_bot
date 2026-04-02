@@ -199,10 +199,9 @@ async def restore_teacher(session: AsyncSession, user_id: int) -> bool:
 
 
 async def reject_profile(session: AsyncSession, profile: Profile) -> None:
-    user = await session.get(User, profile.bot_user_id)
-    if user and user.role == UserRole.teacher:
-        user.role = None
-
+    # Rol hech qachon o'chirilmaydi — faqat is_approved=False qo'yiladi.
+    # Rolni saqlash shart: rad etilgan user /start bossa rol tanlash
+    # keyboard ko'rishi va qayta ro'yxatdan o'tishi uchun rol kerak.
     profile.is_approved = False
     profile.assigned_groups = []
     profile.approved_by = None

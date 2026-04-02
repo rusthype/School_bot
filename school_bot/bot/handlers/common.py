@@ -809,6 +809,33 @@ async def cmd_start(
             reply_markup=role_keyboard,
         )
         return
+    # Agar foydalanuvchi roli bor lekin profili tasdiqlanmagan bo'lsa (rad etilgan),
+    # menyuga o'tkazmasdan rol tanlash keyboard ko'rsatiladi.
+    # Bu holat Fix 1 bilan birga ishlaydi: reject_profile endi rolni o'zgartirmaydi,
+    # shuning uchun middleware is_teacher=True qilib qo'yadi, lekin profil hali
+    # tasdiqlanmagan — foydalanuvchi qayta ro'yxatdan o'tishi shart.
+    if not is_superadmin and not is_student and profile is not None and not profile.is_approved:
+        await state.clear()
+        await state.set_state(RoleSelectStates.waiting_role)
+        role_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👨‍🏫 O'qituvchi", callback_data="role_select:teacher"),
+                InlineKeyboardButton(text="👨‍👩‍👧 Ota-ona", callback_data="role_select:parent"),
+            ],
+            [
+                InlineKeyboardButton(text="🎓 O'quvchi", callback_data="role_select:student"),
+            ],
+        ])
+        await message.answer(
+            "Assalomu alaykum! Botga xush kelibsiz.\n\nIltimos, o'zingizning rolingizni tanlang:",
+            reply_markup=role_keyboard,
+        )
+        exec_ms = int((time.time() - start_time) * 1000)
+        logger.info(
+            "Rad etilgan foydalanuvchi rol tanlash sahifasiga yo'naltirildi",
+            extra={"user_id": user_id, "chat_id": chat_id, "command": "start", "exec_ms": exec_ms},
+        )
+        return
     await state.clear()
     await state.update_data(menu_active=True)
     lines: list[str] = [
