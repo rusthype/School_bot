@@ -2815,7 +2815,7 @@ async def button_add_teacher(
     from school_bot.bot.handlers.admin import cmd_add_teacher_start
     await cmd_add_teacher_start(message, state, is_superadmin)
 @router.message(F.text == "❌ O'qituvchi o'chirish")
-async def button_remove_teacher(
+async def button_remove_teacher_inline(
         message: Message,
         state: FSMContext,
         session: AsyncSession,
@@ -2848,7 +2848,6 @@ async def button_remove_teacher(
         button_text = f"👨‍🏫 {teacher_name} {username}".strip()
         builder.button(text=button_text, callback_data=f"common_del_teacher_{teacher.id}")
     builder.adjust(1)
-    # RemoveTeacherStates ni dinamik ravishda saqlash
     await state.update_data(awaiting_teacher_selection=True)
     await message.answer(
         "👨‍🏫 O'chirmoqchi bo'lgan o'qituvchingizni tanlang:",
@@ -3041,7 +3040,7 @@ async def button_list_teachers(
     from school_bot.bot.handlers.admin import cmd_list_teachers
     await cmd_list_teachers(message, session, is_superadmin)
 @router.message(F.text == "❌ O'qituvchi o'chirish")
-async def button_remove_teacher(
+async def button_remove_teacher_fsm(
     message: Message,
     state: FSMContext,
     session: AsyncSession,

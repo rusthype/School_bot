@@ -1008,10 +1008,16 @@ async def _perform_reject(
 
     if user:
         reason_text = f"Sabab: {reason}" if reason else "Sabab: ko'rsatilmagan"
-        await message.bot.send_message(
-            chat_id=user.telegram_id,
-            text=f"❌ Ro'yxatdan o'tish so'rovingiz rad etildi. {reason_text}",
-        )
+        try:
+            await message.bot.send_message(
+                chat_id=user.telegram_id,
+                text=f"❌ Ro'yxatdan o'tish so'rovingiz rad etildi. {reason_text}",
+            )
+        except Exception as _send_err:
+            logger.warning(
+                f"Rad etish xabari yetkazilmadi: {user.telegram_id} — {_send_err}",
+                extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "reject"},
+            )
         logger.warning(
             f"Admin {message.from_user.id} o'qituvchini rad etdi: {user.telegram_id}, {reason_text}",
             extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "reject"},
