@@ -35,3 +35,7 @@ class TeacherSelfEditStates(StatesGroup):
     waiting_first_name = State()
     waiting_last_name = State()
     waiting_phone = State()
+
+
+class AddTeacherStates(StatesGroup):
+    waiting_telegram_id = State()

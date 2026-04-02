@@ -48,7 +48,7 @@ from school_bot.bot.services.profile_service import (
     get_profile_by_user_id,
     update_teacher_profile,
 )
-from school_bot.bot.states.admin_states import TeacherSelfEditStates
+from school_bot.bot.states.admin_states import TeacherSelfEditStates, AddTeacherStates
 from school_bot.bot.services.approval_service import notify_superadmins_new_registration
 from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.services.superadmin_menu_builder import SuperAdminMenuBuilder
@@ -220,6 +220,7 @@ def get_users_management_keyboard() -> ReplyKeyboardMarkup:
     builder.row(KeyboardButton(text="❌ Foydalanuvchi o'chirish"))
     builder.row(KeyboardButton(text="➕ Admin qo'shish"))
     builder.row(KeyboardButton(text="❌ Admin o'chirish"))
+    builder.row(KeyboardButton(text="➕ O'qituvchi qo'shish"))
     builder.row(KeyboardButton(text="🔙 Orqaga"), KeyboardButton(text="🏠 Bosh menyu"))
     return builder.as_markup(resize_keyboard=True, input_field_placeholder="👇 Menyudan tanlang...")
 def get_student_keyboard() -> ReplyKeyboardMarkup:
@@ -3098,6 +3099,96 @@ async def button_remove_admin(
         return
     from school_bot.bot.handlers.admin_management import cmd_remove_admin
     await cmd_remove_admin(message, state, session, None, is_superadmin)
+
+
+@router.message(F.text == "➕ O'qituvchi qo'shish")
+async def button_add_teacher(
+        message: Message,
+        state: FSMContext,
+        is_superadmin: bool = False,
+) -> None:
+    if not is_superadmin:
+        await message.answer("⛔ Bu tugma faqat superadminlar uchun.")
+        return
+    await state.set_state(AddTeacherStates.waiting_telegram_id)
+    await message.answer(
+        "👨‍🏫 O'qituvchi Telegram ID sini kiriting:\n\n"
+        "❌ Bekor qilish uchun /cancel bosing",
+        reply_markup=get_cancel_keyboard(),
+    )
+
+
+@router.message(AddTeacherStates.waiting_telegram_id, F.text)
+async def add_teacher_waiting_id(
+        message: Message,
+        state: FSMContext,
+        session: AsyncSession,
+        db_user,
+        is_superadmin: bool = False,
+) -> None:
+    raw_text = (message.text or "").strip()
+
+    if raw_text == "❌ Bekor qilish":
+        await cancel_current_action(message, state, session, db_user, is_superadmin)
+        return
+
+    if not raw_text.lstrip("-").isdigit():
+        await message.answer(
+            "❌ Noto'g'ri ID. Faqat raqam kiriting:",
+            reply_markup=get_cancel_keyboard(),
+        )
+        return
+
+    telegram_id = int(raw_text)
+
+    from school_bot.bot.services.user_service import get_or_create_user
+    from datetime import datetime, timezone
+
+    user = await get_or_create_user(session, telegram_id=telegram_id, full_name=None)
+
+    # Update role to teacher
+    user.role = UserRole.teacher
+    await session.flush()
+
+    # Create or update profile with is_approved=True
+    profile = await get_profile_by_user_id(session, user.id)
+    if profile is None:
+        full_name = user.full_name or ""
+        parts = full_name.split()
+        first_name = parts[0] if parts else "Noma'lum"
+        last_name = " ".join(parts[1:]) if len(parts) > 1 else None
+        profile = Profile(
+            bot_user_id=user.id,
+            first_name=first_name,
+            last_name=last_name,
+            phone="Noma'lum",
+            assigned_groups=[],
+            profile_type="teacher",
+            is_approved=True,
+            approved_by_id=db_user.id if db_user else None,
+            approved_at=datetime.now(timezone.utc),
+        )
+        session.add(profile)
+    else:
+        profile.is_approved = True
+        profile.approved_by_id = db_user.id if db_user else None
+        profile.approved_at = datetime.now(timezone.utc)
+
+    await session.commit()
+    await state.clear()
+
+    username = f"@{user.username}" if user.username else ""
+    name = user.full_name or "Ism yo'q"
+    keyboard = get_users_management_keyboard()
+    display_name = f"{name} {username}".strip()
+    await message.answer(
+        f"✅ O'qituvchi muvaffaqiyatli qo'shildi!\n\n"
+        f"👤 Foydalanuvchi: {display_name}\n"
+        f"🆔 Telegram ID: {telegram_id}\n"
+        f"📌 Rol: O'qituvchi\n"
+        f"✅ Tasdiqlangan: Ha",
+        reply_markup=keyboard,
+    )
 
 
 # ============== TEACHER SELF-EDIT ==============
