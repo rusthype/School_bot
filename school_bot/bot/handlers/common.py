@@ -1114,6 +1114,7 @@ async def books_menu(
     if is_teacher:
         await message.answer("📚 **KITOBLAR**", reply_markup=get_teacher_books_keyboard())
         return
+    await message.answer("⛔ Bu buyruq faqat tasdiqlangan o'qituvchilar uchun.")
 @router.message(F.text == "📝 Yangi topshiriq")
 async def button_new_task(
         message: Message,
@@ -1129,7 +1130,7 @@ async def button_new_task(
         extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "new_task"},
     )
     if not (is_teacher or is_superadmin):
-        await message.answer("⛔ Bu tugma faqat o'qituvchilar uchun.")
+        await message.answer("⛔ Bu buyruq faqat tasdiqlangan o'qituvchilar uchun.")
         return
     from school_bot.bot.handlers.teacher import cmd_new_task
     await cmd_new_task(message, state, session, profile, is_teacher or is_superadmin, is_superadmin)
@@ -1143,16 +1144,19 @@ async def button_poll_voters(
     is_superadmin: bool = False
 ) -> None:
     if not (is_teacher or is_superadmin):
+        await message.answer("⛔ Bu buyruq faqat tasdiqlangan o'qituvchilar uchun.")
         return
     await message.answer("📊 **OVOZLAR (GRADES)**", reply_markup=get_teacher_votes_keyboard())
 @router.message(F.text == "👥 O'quvchilar")
 async def teacher_students_menu(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
     if not (is_teacher or is_superadmin):
+        await message.answer("⛔ Bu buyruq faqat tasdiqlangan o'qituvchilar uchun.")
         return
     await message.answer("👥 **O'QUVCHILAR**", reply_markup=get_teacher_students_keyboard())
 @router.message(F.text == "📈 Statistika")
 async def teacher_stats_menu(message: Message, is_teacher: bool = False, is_superadmin: bool = False) -> None:
     if not (is_teacher or is_superadmin):
+        await message.answer("⛔ Bu buyruq faqat tasdiqlangan o'qituvchilar uchun.")
         return
     await message.answer("📈 **STATISTIKA**", reply_markup=get_teacher_stats_keyboard())
 @router.message(F.text == "⚙️ Sozlamalar")
