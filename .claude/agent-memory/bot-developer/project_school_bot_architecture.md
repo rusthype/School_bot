@@ -30,4 +30,6 @@ Service layer in `school_bot/bot/services/`: user_service, profile_service, appr
 
 Approval selections for teacher approval flow stored in module-level dicts in `approval_service.py` — not persistent across restarts.
 
+UserContextMiddleware role-resolution gap (fixed 2026-04-02): middleware set is_teacher=False for a user with role=teacher when their profile existed but was not yet approved (is_approved=False). The approved-profile branch (line 100) and the legacy branch (line 109, "profile is None") both missed this case. Fix: extended legacy branch to cover `profile is None OR not profile.is_approved`. Defence-in-depth guard also added in cmd_start: if db_user.role==teacher/librarian and is_authorized=False, log a warning, set the flag, and show the correct menu — never route to role-selection for users with an established DB role.
+
 Photos stored in local `photos/` directory (not cloud). Book covers in `covers/`. Logs in `logs/`.
