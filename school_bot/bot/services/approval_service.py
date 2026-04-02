@@ -189,14 +189,27 @@ async def notify_superadmins_new_registration(
         school = await session.get(School, profile.school_id)
         school_name = school.name if school else None
 
+    # If school_id is not set, check last_name for free-text school entered during
+    # the post-role registration flow (stored there until admin assigns a real school).
+    school_display = school_name
+    if not school_display and profile.last_name:
+        school_display = profile.last_name  # free-text school name from registration
+
+    role_label = {
+        "teacher": "O'qituvchi",
+        "parent": "Ota-ona",
+        "student": "O'quvchi",
+    }.get(profile.profile_type or "", profile.profile_type or "Noma'lum")
+
     message_text = (
-        "👑 Yangi o'qituvchi ro'yxatdan o'tishi:\n\n"
-        f"👤 Ism: {full_name}\n"
-        f"🔹 Foydalanuvchi nomi: {username}\n"
-        f"📱 Telefon: {profile.phone}\n"
-        f"🆔 Telegram ID: {user_id_display}\n"
-        f"🏫 Tanlangan maktab: {school_name or 'Tanlanmagan'}\n"
-        f"📅 So'rov vaqti: {requested_str}"
+        "Yangi foydalanuvchi ro'yxatdan o'tishi:\n\n"
+        f"Ism: {full_name}\n"
+        f"Rol: {role_label}\n"
+        f"Foydalanuvchi nomi: {username}\n"
+        f"Telefon: {profile.phone or '—'}\n"
+        f"Telegram ID: {user_id_display}\n"
+        f"Maktab (o'zi kiritgan): {school_display or 'Kiritilmagan'}\n"
+        f"So'rov vaqti: {requested_str}"
     )
 
     schools_result = await session.execute(select(School).order_by(School.number))
