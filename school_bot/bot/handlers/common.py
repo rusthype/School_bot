@@ -729,27 +729,6 @@ async def cmd_start(
     )
     await state.update_data(menu_active=False)
     is_authorized = bool(is_superadmin or is_teacher or is_librarian or is_group_admin)
-    if not is_authorized:
-        # Himoya: agar DB dagi rol o'qituvchi, kutubxonachi yoki superadmin bo'lsa,
-        # middleware xatoligi yuzaga kelsa ham (masalan, tasdiqlanmagan profil bilan
-        # qayta faollashtirilgan foydalanuvchi), rolni hech qachon o'zgartirmaymiz.
-        # Bu holda to'g'ri menyuni ko'rsatamiz.
-        if db_user.role == UserRole.teacher:
-            logger.warning(
-                "cmd_start: db_user.role=teacher lekin is_teacher=False — middleware xatoligi. "
-                "Foydalanuvchiga teacher menyusi ko'rsatilmoqda, rol o'zgartirilmaydi.",
-                extra={"user_id": user_id},
-            )
-            is_teacher = True
-            is_authorized = True
-        elif db_user.role == UserRole.librarian:
-            logger.warning(
-                "cmd_start: db_user.role=librarian lekin is_librarian=False — middleware xatoligi. "
-                "Foydalanuvchiga librarian menyusi ko'rsatilmoqda, rol o'zgartirilmaydi.",
-                extra={"user_id": user_id},
-            )
-            is_librarian = True
-            is_authorized = True
 
     if not is_authorized:
         if profile is not None and profile.is_approved:

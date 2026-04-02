@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
 
-from school_bot.bot.services.user_service import get_or_create_user
+from school_bot.bot.services.user_service import get_or_create_user, hard_delete_user_by_telegram_id
 from school_bot.database.models import Profile, UserRole
 from school_bot.bot.services.logger_service import get_logger
 
@@ -61,14 +61,22 @@ class UserContextMiddleware(BaseMiddleware):
             username=username  # YANGI: username parametri
         )
 
-        # Faol emasligini tekshirish — superadminlarga blok qo'llanmaydi
-        # /start yuborganda yoki istalgan xabar yuborganda foydalanuvchi avto-qayta faollashtiriladi
+        # Faol emasligini tekshirish — superadminlarga blok qo'llanmaydi.
+        # is_active=False bo'lgan foydalanuvchilar uchun ikkala yozuv (bot_users va bot_profiles)
+        # hard-delete qilinadi, so'ngra ular yangi foydalanuvchi sifatida davom etadilar.
         if not db_user.is_active and db_user.role != UserRole.superadmin and tg_user.id not in self._superadmin_ids:
-            db_user.is_active = True
-            await session.commit()
-            await session.refresh(db_user)
-            logger.info(
-                f"Foydalanuvchi avto-qayta faollashtirildi: telegram_id={tg_user.id}"
+            deleted = await hard_delete_user_by_telegram_id(session=session, telegram_id=tg_user.id)
+            if deleted:
+                logger.info(
+                    f"Nofaol foydalanuvchi hard-delete qilindi, yangi foydalanuvchi sifatida qayta ro'yxatdan o'tadi: "
+                    f"telegram_id={tg_user.id}"
+                )
+            # Yangi foydalanuvchi sifatida qayta yaratish
+            db_user = await get_or_create_user(
+                session=session,
+                telegram_id=tg_user.id,
+                full_name=full_name,
+                username=username,
             )
 
         # Profilni olish (registratsiya/approval uchun)
@@ -104,11 +112,6 @@ class UserContextMiddleware(BaseMiddleware):
                     db_user.role = UserRole.teacher
                     await session.commit()
                     await session.refresh(db_user)
-        elif db_user.role == UserRole.teacher and (profile is None or not profile.is_approved):
-            # Legacy teacherlar uchun (profil bo'lmasa yoki tasdiqlanmagan bo'lsa ham
-            # teacher ruxsatini saqlab qolamiz — qayta faollashtirilgan foydalanuvchilar
-            # uchun rolni yo'qotmaslik kerak)
-            is_teacher = True
         elif tg_user.id in self._teacher_ids:
             is_teacher = True
         elif is_group_admin:
