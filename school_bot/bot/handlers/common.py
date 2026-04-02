@@ -915,6 +915,21 @@ async def handle_role_selection(
 
     await session.commit()
 
+    # Check if a profile with a non-empty first_name already exists.
+    # If so, skip the name/school collection steps entirely.
+    existing_profile = await get_profile_by_user_id(session, db_user.id)
+    if existing_profile and existing_profile.first_name and existing_profile.first_name.strip():
+        await state.clear()
+        await callback.message.edit_text(
+            "✅ Ma'lumotlaringiz qabul qilindi. Admin tasdiqlashini kuting."
+        )
+        await callback.answer()
+        logger.info(
+            "Foydalanuvchi mavjud profil bilan rol tanladi, kutish xabari ko'rsatildi",
+            extra={"user_id": db_user.telegram_id, "role": role},
+        )
+        return
+
     # Store role in FSM so subsequent steps can use it
     await state.set_data({"post_role_type": role})
     await state.set_state(PostRoleRegistrationStates.waiting_name)
