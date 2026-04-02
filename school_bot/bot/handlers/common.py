@@ -30,7 +30,7 @@ from school_bot.database.models import (
     BookOrder, BookOrderItem, BookCategory, TeacherAttendance, BotSettings,
 )
 from school_bot.bot.states.new_task import NewTaskStates
-from school_bot.bot.states.registration import RegistrationStates, RoleSelectStates
+from school_bot.bot.states.registration import RegistrationStates
 from school_bot.bot.states.book_states import CategoryAddStates
 from school_bot.bot.states.dashboard_states import (
     SearchStates,
@@ -739,41 +739,26 @@ async def cmd_start(
                 reply_markup=ReplyKeyboardRemove(),
             )
             return
-        # profile is None OR profile exists but not yet approved — show role selection
+        # profile is None OR profile exists but not yet approved — start registration
         await state.clear()
-        await state.set_state(RoleSelectStates.waiting_role)
-        role_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="👨‍🏫 O'qituvchi", callback_data="role_select:teacher"),
-                InlineKeyboardButton(text="👨‍👩‍👧 Ota-ona", callback_data="role_select:parent"),
-            ],
-        ])
+        await state.set_state(RegistrationStates.welcome)
         await message.answer(
-            "Assalomu alaykum! Botga xush kelibsiz.\n\nIltimos, o'zingizning rolingizni tanlang:",
-            reply_markup=role_keyboard,
+            "Assalomu alaykum! Botga xush kelibsiz.\n\nRo'yxatdan o'tishni boshlaymizmi?",
+            reply_markup=get_registration_start_keyboard(),
         )
         return
     # Agar foydalanuvchi roli bor lekin profili tasdiqlanmagan bo'lsa (rad etilgan),
-    # menyuga o'tkazmasdan rol tanlash keyboard ko'rsatiladi.
-    # Bu holat Fix 1 bilan birga ishlaydi: reject_profile endi rolni o'zgartirmaydi,
-    # shuning uchun middleware is_teacher=True qilib qo'yadi, lekin profil hali
-    # tasdiqlanmagan — foydalanuvchi qayta ro'yxatdan o'tishi shart.
+    # menyuga o'tkazmasdan ro'yxatdan o'tish sahifasiga yo'naltiriladi.
     if not is_superadmin and profile is not None and not profile.is_approved:
         await state.clear()
-        await state.set_state(RoleSelectStates.waiting_role)
-        role_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="👨‍🏫 O'qituvchi", callback_data="role_select:teacher"),
-                InlineKeyboardButton(text="👨‍👩‍👧 Ota-ona", callback_data="role_select:parent"),
-            ],
-        ])
+        await state.set_state(RegistrationStates.welcome)
         await message.answer(
-            "Assalomu alaykum! Botga xush kelibsiz.\n\nIltimos, o'zingizning rolingizni tanlang:",
-            reply_markup=role_keyboard,
+            "Assalomu alaykum! Botga xush kelibsiz.\n\nRo'yxatdan o'tishni boshlaymizmi?",
+            reply_markup=get_registration_start_keyboard(),
         )
         exec_ms = int((time.time() - start_time) * 1000)
         logger.info(
-            "Rad etilgan foydalanuvchi rol tanlash sahifasiga yo'naltirildi",
+            "Rad etilgan foydalanuvchi ro'yxatdan o'tish sahifasiga yo'naltirildi",
             extra={"user_id": user_id, "chat_id": chat_id, "command": "start", "exec_ms": exec_ms},
         )
         return
@@ -837,75 +822,6 @@ async def cmd_start(
     logger.info(
         "/start buyrug'i bajarildi",
         extra={"user_id": user_id, "chat_id": chat_id, "command": "start", "exec_ms": exec_ms},
-    )
-
-
-_VALID_ROLES = {"teacher", "parent"}
-_ROLE_LABELS = {
-    "teacher": "O'qituvchi",
-    "parent": "Ota-ona",
-}
-
-
-@router.callback_query(lambda c: c.data and c.data.startswith("role_select:"))
-async def handle_role_selection(
-        callback: CallbackQuery,
-        state: FSMContext,
-        session: AsyncSession,
-        db_user,
-) -> None:
-    """Yangi foydalanuvchi rol tanladi — profilni saqlaydi va admin tasdiqlashini kutadi."""
-    role = callback.data.split(":", 1)[1] if callback.data else ""
-    if role == "student":
-        await callback.answer(
-            "⛔ Bu bot faqat o'qituvchilar uchun.",
-            show_alert=True,
-        )
-        return
-    if role not in _VALID_ROLES:
-        await callback.answer("Noto'g'ri tanlov. Iltimos, tugmadan foydalaning.", show_alert=True)
-        return
-
-    # Save role on db_user (parent maps to None role — profile_type carries it)
-    if role == "teacher":
-        db_user.role = UserRole.teacher
-    else:
-        # parent: no UserRole enum value — leave role as-is, use profile_type
-        pass
-
-    await session.commit()
-
-    # Create minimal pending profile immediately — no name/school collection
-    profile = await upsert_profile(
-        session,
-        user_id=db_user.id,
-        first_name=db_user.full_name or "",
-        last_name="",
-        phone="",
-        school_id=None,
-        profile_type=role,
-    )
-
-    await state.clear()
-
-    role_label = _ROLE_LABELS[role]
-    await callback.message.edit_text(
-        f"✅ Siz {role_label} sifatida ro'yxatdan o'tdingiz. Admin tasdiqlashini kuting."
-    )
-    await callback.answer()
-
-    try:
-        await notify_superadmins_new_registration(session, callback.bot, profile)
-    except Exception:
-        logger.error(
-            "Superadminlarga ro'yxatdan o'tish xabari yuborilmadi",
-            exc_info=True,
-            extra={"user_id": db_user.telegram_id, "command": "role_select_notify"},
-        )
-
-    logger.info(
-        "Yangi foydalanuvchi rol tanladi, tasdiqlash kutilmoqda",
-        extra={"user_id": db_user.telegram_id, "role": role},
     )
 
 
