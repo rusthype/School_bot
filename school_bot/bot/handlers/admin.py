@@ -1063,7 +1063,9 @@ async def cmd_add_teacher_start(
         return
 
     await message.answer(
-        "ℹ️ Bu buyruq eskirgan. O'qituvchilar /start orqali ro'yxatdan o'tib, tasdiqni kutishlari kerak."
+    await message.answer(
+    await state.set_state(AddTeacherStates.waiting_for_input)
+        "➕ O'qituvchi Telegram ID sini kiriting:\n\n/cancel — bekor qilish"
     )
 
 
