@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from school_bot.database.models import User, UserRole
@@ -101,6 +101,20 @@ async def remove_teacher_role(session: AsyncSession, telegram_id: int) -> tuple[
     await session.commit()
     await session.refresh(user)
     return True, user
+
+
+async def hard_delete_user_by_telegram_id(session: AsyncSession, telegram_id: int) -> bool:
+    """
+    Hard-delete a bot_users row (and its bot_profiles row via CASCADE) by telegram_id.
+    Returns True if a row was deleted, False if the user was not found.
+    """
+    result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        return False
+    await session.delete(user)
+    await session.commit()
+    return True
 
 
 async def seed_superadmins(session_factory: Callable[[], AsyncSession], superadmin_tg_ids: list[int]) -> None:
