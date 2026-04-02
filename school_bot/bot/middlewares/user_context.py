@@ -62,14 +62,14 @@ class UserContextMiddleware(BaseMiddleware):
         )
 
         # Faol emasligini tekshirish — superadminlarga blok qo'llanmaydi
+        # /start yuborganda yoki istalgan xabar yuborganda foydalanuvchi avto-qayta faollashtiriladi
         if not db_user.is_active and db_user.role != UserRole.superadmin and tg_user.id not in self._superadmin_ids:
-            from aiogram.types import Message as AiogramMessage, CallbackQuery as AiogramCQ
-            blocked_text = "⛔ Sizning akkauntingiz o'chirilgan. Admin bilan bog'laning."
-            if isinstance(event, AiogramMessage):
-                await event.answer(blocked_text)
-            elif isinstance(event, AiogramCQ):
-                await event.answer(blocked_text, show_alert=True)
-            return
+            db_user.is_active = True
+            await session.commit()
+            await session.refresh(db_user)
+            logger.info(
+                f"Foydalanuvchi avto-qayta faollashtirildi: telegram_id={tg_user.id}"
+            )
 
         # Profilni olish (registratsiya/approval uchun)
         result = await session.execute(select(Profile).where(Profile.bot_user_id == db_user.id))

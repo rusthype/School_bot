@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from school_bot.bot.services.user_service import (
@@ -1911,10 +1911,14 @@ async def cmd_restore_teacher_start(
             text=f"♻️ {display_name}",
             callback_data=f"restore_teacher_{teacher.id}",
         )
-    builder.adjust(1)
+        builder.button(
+            text="🗑 O'chirish",
+            callback_data=f"perm_del:{teacher.id}",
+        )
+    builder.adjust(2)
 
     await message.answer(
-        "♻️ Tiklash uchun o'qituvchini tanlang:",
+        "♻️ Tiklash uchun o'qituvchini tanlang yoki butunlay o'chiring:",
         reply_markup=builder.as_markup(),
     )
 
@@ -1952,6 +1956,101 @@ async def process_restore_teacher(
     else:
         await callback.message.edit_text(f"❌ Tiklab bo'lmadi: {teacher_name}")
 
+    await callback.answer()
+
+
+# ============== PERMANENT DELETE ==============
+@router.callback_query(lambda c: c.data and c.data.startswith("perm_del:"))
+async def process_perm_del_confirm(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        db_user,
+) -> None:
+    """Foydalanuvchini butunlay o'chirish — tasdiqlash so'rovi"""
+    is_superadmin = (db_user.role == UserRole.superadmin)
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
+        return
+
+    try:
+        user_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    result = await session.execute(select(User).where(User.id == user_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        await callback.message.edit_text("❌ Foydalanuvchi topilmadi.")
+        await callback.answer()
+        return
+
+    display_name = target.full_name or f"ID: {target.telegram_id}"
+
+    confirm_kb = InlineKeyboardBuilder()
+    confirm_kb.button(
+        text="✅ Ha, o'chirish",
+        callback_data=f"perm_del_yes:{user_id}",
+    )
+    confirm_kb.button(
+        text="❌ Bekor qilish",
+        callback_data="perm_del_cancel",
+    )
+    confirm_kb.adjust(2)
+
+    await callback.message.edit_text(
+        f"Foydalanuvchini butunlay o'chirishni tasdiqlaysizmi?\n\n"
+        f"👤 {display_name}",
+        reply_markup=confirm_kb.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("perm_del_yes:"))
+async def process_perm_del_execute(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        db_user,
+) -> None:
+    """Foydalanuvchini bazadan butunlay o'chirish"""
+    is_superadmin = (db_user.role == UserRole.superadmin)
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
+        return
+
+    try:
+        user_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
+        return
+
+    result = await session.execute(select(User).where(User.id == user_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        await callback.message.edit_text("❌ Foydalanuvchi topilmadi.")
+        await callback.answer()
+        return
+
+    display_name = target.full_name or f"ID: {target.telegram_id}"
+
+    await session.execute(delete(User).where(User.id == user_id))
+    await session.commit()
+
+    logger.info(
+        f"Foydalanuvchi butunlay o'chirildi: id={user_id}, name={display_name}",
+        extra={"user_id": callback.from_user.id, "chat_id": callback.message.chat.id, "command": "perm_del"},
+    )
+
+    await callback.message.edit_text(f"✅ Foydalanuvchi butunlay o'chirildi: {display_name}")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "perm_del_cancel")
+async def process_perm_del_cancel(
+        callback: CallbackQuery,
+) -> None:
+    """Butunlay o'chirishni bekor qilish"""
+    await callback.message.edit_text("❌ O'chirish bekor qilindi.")
     await callback.answer()
 
 
