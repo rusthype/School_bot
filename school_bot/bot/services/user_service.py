@@ -35,7 +35,7 @@ async def get_or_create_user(
         telegram_id=telegram_id,
         full_name=full_name,
         username=username,  # YANGI
-        role=UserRole.student
+        role=None
     )
     session.add(user)
     await session.commit()

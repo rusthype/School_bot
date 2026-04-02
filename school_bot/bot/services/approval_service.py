@@ -198,7 +198,6 @@ async def notify_superadmins_new_registration(
     role_label = {
         "teacher": "O'qituvchi",
         "parent": "Ota-ona",
-        "student": "O'quvchi",
     }.get(profile.profile_type or "", profile.profile_type or "Noma'lum")
 
     message_text = (

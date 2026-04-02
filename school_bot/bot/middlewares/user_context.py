@@ -104,8 +104,6 @@ class UserContextMiddleware(BaseMiddleware):
                     db_user.role = UserRole.teacher
                     await session.commit()
                     await session.refresh(db_user)
-            elif profile.profile_type == "student":
-                is_student = True
         elif db_user.role == UserRole.teacher and (profile is None or not profile.is_approved):
             # Legacy teacherlar uchun (profil bo'lmasa yoki tasdiqlanmagan bo'lsa ham
             # teacher ruxsatini saqlab qolamiz — qayta faollashtirilgan foydalanuvchilar
@@ -125,12 +123,30 @@ class UserContextMiddleware(BaseMiddleware):
             is_teacher = False
             is_librarian = False
 
+        # O'quvchi roli bu botda qo'llab-quvvatlanmaydi — faqat o'qituvchilar uchun bot.
+        # Agar foydalanuvchi student roliga ega bo'lsa, blok xabar yuboriladi.
+        if not is_superadmin and not is_teacher and not is_librarian:
+            if db_user.role == UserRole.student or (profile and profile.profile_type == "student"):
+                from aiogram.types import Message, CallbackQuery
+                if isinstance(event, Message) and event.chat.type == "private":
+                    await event.answer(
+                        "⛔ Bu bot faqat o'qituvchilar uchun. "
+                        "Tez orada o'quvchilar uchun alohida bot ishga tushiriladi."
+                    )
+                    return
+                if isinstance(event, CallbackQuery) and event.message and event.message.chat.type == "private":
+                    await event.answer(
+                        "⛔ Bu bot faqat o'qituvchilar uchun.",
+                        show_alert=True,
+                    )
+                    return
+
         # Ma'lumotlarni data ga qo'shish
         data["db_user"] = db_user
         data["is_superadmin"] = is_superadmin
         data["is_teacher"] = is_teacher
         data["is_librarian"] = is_librarian
-        data["is_student"] = is_student
+        data["is_student"] = False  # O'quvchi roli bu botda qo'llab-quvvatlanmaydi
         data["is_group_admin"] = is_group_admin
         data["profile"] = profile
 

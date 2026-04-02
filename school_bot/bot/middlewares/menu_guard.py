@@ -22,7 +22,6 @@ class MenuGuardMiddleware(BaseMiddleware):
                 data.get("is_superadmin")
                 or data.get("is_teacher")
                 or data.get("is_librarian")
-                or data.get("is_student")
                 or data.get("is_group_admin")
             )
 
@@ -61,7 +60,6 @@ class MenuGuardMiddleware(BaseMiddleware):
                 data.get("is_superadmin")
                 or data.get("is_teacher")
                 or data.get("is_librarian")
-                or data.get("is_student")
                 or data.get("is_group_admin")
             )
 
