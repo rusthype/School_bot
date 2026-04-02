@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext

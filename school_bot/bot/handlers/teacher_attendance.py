@@ -32,7 +32,9 @@ async def teacher_check_in_start(
     is_teacher: bool = False,
 ) -> None:
     if not is_teacher:
+        await message.answer("⛔ Bu funksiya faqat tasdiqlangan o'qituvchilar uchun.")
         return
+    await state.update_data(menu_active=True)
     await state.set_state(TeacherAttendanceStates.waiting_for_check_in_location)
     await message.answer(
         "📍 Maktabga kelganingizni tasdiqlash uchun lokatsiyangizni yuboring.",
@@ -47,7 +49,9 @@ async def teacher_check_out_start(
     is_teacher: bool = False,
 ) -> None:
     if not is_teacher:
+        await message.answer("⛔ Bu funksiya faqat tasdiqlangan o'qituvchilar uchun.")
         return
+    await state.update_data(menu_active=True)
     await state.set_state(TeacherAttendanceStates.waiting_for_check_out_location)
     await message.answer(
         "📍 Maktabdan chiqqaningizni tasdiqlash uchun lokatsiyangizni yuboring.",
@@ -84,6 +88,8 @@ async def teacher_check_in_location(
     is_superadmin: bool = False,
 ) -> None:
     if not is_teacher:
+        await state.clear()
+        await message.answer("⛔ Bu funksiya faqat tasdiqlangan o'qituvchilar uchun.")
         return
 
     try:
@@ -127,6 +133,8 @@ async def teacher_check_out_location(
     is_superadmin: bool = False,
 ) -> None:
     if not is_teacher:
+        await state.clear()
+        await message.answer("⛔ Bu funksiya faqat tasdiqlangan o'qituvchilar uchun.")
         return
 
     try:

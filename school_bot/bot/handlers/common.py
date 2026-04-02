@@ -1640,6 +1640,7 @@ async def add_student_phone(
     if not schools:
         await message.answer("Maktablar topilmadi. Administrator bilan bog'laning.")
         await state.clear()
+        await state.update_data(menu_active=True)
         return
     await state.set_state(AddStudentStates.school_selection)
     keyboard = build_registration_school_keyboard(schools, page=1)
