@@ -30,7 +30,7 @@ from school_bot.database.models import (
     BookOrder, BookOrderItem, BookCategory, TeacherAttendance, BotSettings,
 )
 from school_bot.bot.states.new_task import NewTaskStates
-from school_bot.bot.states.registration import RegistrationStates
+from school_bot.bot.states.registration import RegistrationStates, RoleSelectStates
 from school_bot.bot.states.book_states import CategoryAddStates
 from school_bot.bot.states.dashboard_states import (
     SearchStates,
@@ -771,12 +771,19 @@ async def cmd_start(
             )
             return
         await state.clear()
-        await state.update_data(menu_active=False, reg_type="student")
-        await state.set_state(RegistrationStates.first_name)
+        await state.set_state(RoleSelectStates.waiting_role)
+        role_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👨‍🏫 O'qituvchi", callback_data="role_select:teacher"),
+                InlineKeyboardButton(text="👨‍👩‍👧 Ota-ona", callback_data="role_select:parent"),
+            ],
+            [
+                InlineKeyboardButton(text="🎓 O'quvchi", callback_data="role_select:student"),
+            ],
+        ])
         await message.answer(
-            "Assalomu alaykum! Botdan foydalanish uchun ro'yxatdan o'tishingiz kerak.\n"
-            "Ismingizni kiriting:",
-            reply_markup=ReplyKeyboardRemove(),
+            "Assalomu alaykum! Botga xush kelibsiz.\n\nIltimos, o'zingizning rolingizni tanlang:",
+            reply_markup=role_keyboard,
         )
         return
     await state.clear()
@@ -840,6 +847,68 @@ async def cmd_start(
         "/start buyrug'i bajarildi",
         extra={"user_id": user_id, "chat_id": chat_id, "command": "start", "exec_ms": exec_ms},
     )
+
+
+_VALID_ROLES = {"teacher", "parent", "student"}
+_ROLE_LABELS = {
+    "teacher": "O'qituvchi",
+    "parent": "Ota-ona",
+    "student": "O'quvchi",
+}
+
+
+@router.callback_query(RoleSelectStates.waiting_role, lambda c: c.data and c.data.startswith("role_select:"))
+async def handle_role_selection(
+        callback: CallbackQuery,
+        state: FSMContext,
+        session: AsyncSession,
+        db_user,
+) -> None:
+    """Yangi foydalanuvchi rol tanladi — DBga yozib, admin tasdig'ini kutishga yo'naltirish."""
+    role = callback.data.split(":", 1)[1] if callback.data else ""
+    if role not in _VALID_ROLES:
+        await callback.answer("Noto'g'ri tanlov. Iltimos, tugmadan foydalaning.", show_alert=True)
+        return
+
+    # Save role on db_user (parent maps to None role — profile_type carries it)
+    if role == "teacher":
+        db_user.role = UserRole.teacher
+    elif role == "student":
+        db_user.role = UserRole.student
+    else:
+        # parent: no UserRole enum value — leave role as-is (student default), use profile_type
+        pass
+
+    # Create a minimal Profile row with is_approved=False so admins can review it
+    from sqlalchemy import select as sa_select
+    existing_profile_result = await session.execute(
+        sa_select(Profile).where(Profile.bot_user_id == db_user.id)
+    )
+    existing_profile = existing_profile_result.scalar_one_or_none()
+    if existing_profile is None:
+        new_profile = Profile(
+            bot_user_id=db_user.id,
+            first_name=db_user.full_name or "",
+            phone="",
+            profile_type=role,
+            is_approved=False,
+        )
+        session.add(new_profile)
+
+    await session.commit()
+    await state.clear()
+
+    role_label = _ROLE_LABELS[role]
+    await callback.message.edit_text(
+        f"Siz {role_label} sifatida ro'yxatdan o'tdingiz.\n\nAdmin tasdiqlashini kuting."
+    )
+    await callback.answer()
+    logger.info(
+        "Yangi foydalanuvchi rol tanladi",
+        extra={"user_id": db_user.telegram_id, "role": role},
+    )
+
+
 @router.message(Command("help"))
 async def cmd_help(
     message: Message,
