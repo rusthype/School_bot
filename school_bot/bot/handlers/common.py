@@ -3195,7 +3195,7 @@ async def teacher_self_edit_cancel(
     await cancel_current_action(callback, state, is_teacher=is_teacher)
 
 
-@router.message(Command("cancel"), StateFilter(TeacherSelfEditStates))
+@router.message(Command("cancel"))
 async def teacher_self_edit_cmd_cancel(
     message: Message,
     state: FSMContext,
