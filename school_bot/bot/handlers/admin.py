@@ -37,6 +37,7 @@ from school_bot.bot.services.profile_service import (
     approve_profile,
     reject_profile,
     revoke_teacher,
+    restore_teacher,
     update_teacher_profile,
     update_teacher_user,
     update_teacher_groups,
@@ -111,7 +112,10 @@ def _build_page_keyboard(prefix: str, page: int, total_pages: int) -> InlineKeyb
 
 async def _send_teachers_page(target: Message, session: AsyncSession, page: int, edit: bool = False) -> None:
     total = await session.scalar(
-        select(func.count()).select_from(User).where(User.role == UserRole.teacher)
+        select(func.count()).select_from(User).where(
+            User.role == UserRole.teacher,
+            User.is_active.is_(True),
+        )
     )
     total = total or 0
     total_pages = max(1, (total + PAGE_SIZE_TEACHERS - 1) // PAGE_SIZE_TEACHERS)
@@ -122,7 +126,7 @@ async def _send_teachers_page(target: Message, session: AsyncSession, page: int,
         select(User, Profile, School)
         .join(Profile, User.id == Profile.bot_user_id)
         .outerjoin(School, Profile.school_id == School.id)
-        .where(User.role == UserRole.teacher)
+        .where(User.role == UserRole.teacher, User.is_active.is_(True))
         .order_by(User.created_at)
         .offset(offset)
         .limit(PAGE_SIZE_TEACHERS)
@@ -1775,14 +1779,17 @@ async def cmd_remove_teacher_start(
         await message.answer("⛔ Siz o'qituvchilarni boshqarish huquqiga ega emassiz.")
         return
 
-    # Teacherlar ro'yxatini olish
+    # Teacherlar ro'yxatini olish (faqat faol)
     result = await session.execute(
-        select(User).where(User.role == UserRole.teacher).order_by(User.full_name)
+        select(User).where(
+            User.role == UserRole.teacher,
+            User.is_active.is_(True),
+        ).order_by(User.full_name)
     )
     teachers = result.scalars().all()
 
     if not teachers:
-        await message.answer("📭 Hozircha hech qanday o'qituvchi yo'q.")
+        await message.answer("📭 Hozircha hech qanday faol o'qituvchi yo'q.")
         return
 
     # Teacherlar ro'yxatini inline keyboard ko'rinishida ko'rsatish
@@ -1845,15 +1852,106 @@ async def process_remove_teacher_selection(
         extra={"user_id": callback.from_user.id, "chat_id": callback.message.chat.id, "command": "remove_teacher"},
     )
 
-    # Teacherni o'chirish (profile va role ni yangilash)
+    # Teacherni soft-delete qilish (is_active=False, role=None)
     await revoke_teacher(session, teacher.id)
 
     await callback.message.edit_text(
-        f"✅ O'qituvchi olib tashlandi: {teacher_name}\n"
-        f"📊 Endi u oddiy foydalanuvchi."
+        f"✅ O'qituvchi o'chirildi (arxivlandi): {teacher_name}\n"
+        f"Tiklash uchun 'Foydalanuvchilar' → '♻️ O'qituvchini tiklash' tugmasidan foydalaning."
     )
 
     await state.clear()
+    await callback.answer()
+
+
+# ============== RESTORE TEACHER ==============
+@router.message(Command("restore_teacher"))
+async def cmd_restore_teacher_start(
+        message: Message,
+        state: FSMContext,
+        session: AsyncSession,
+        db_user,
+) -> None:
+    """Arxivlangan o'qituvchini tiklash"""
+    is_superadmin = (db_user.role == UserRole.superadmin)
+    if not is_superadmin:
+        await message.answer("⛔ Siz o'qituvchilarni boshqarish huquqiga ega emassiz.")
+        return
+
+    result = await session.execute(
+        select(User).where(
+            User.is_active.is_(False),
+        ).order_by(User.full_name)
+    )
+    inactive_users = result.scalars().all()
+
+    # Filter to those who were teachers (role is None because revoke clears it)
+    # We identify ex-teachers by their profile having removed_at set
+    from sqlalchemy.orm import selectinload
+    inactive_teachers = []
+    for u in inactive_users:
+        profile_result = await session.execute(
+            select(Profile).where(
+                Profile.bot_user_id == u.id,
+                Profile.removed_at.isnot(None),
+            )
+        )
+        prof = profile_result.scalar_one_or_none()
+        if prof:
+            inactive_teachers.append((u, prof))
+
+    if not inactive_teachers:
+        await message.answer("📭 Arxivlangan o'qituvchilar yo'q.")
+        return
+
+    builder = InlineKeyboardBuilder()
+    for teacher, prof in inactive_teachers:
+        display_name = f"{prof.first_name} {prof.last_name or ''}".strip() or teacher.full_name or f"ID: {teacher.telegram_id}"
+        builder.button(
+            text=f"♻️ {display_name}",
+            callback_data=f"restore_teacher_{teacher.id}",
+        )
+    builder.adjust(1)
+
+    await message.answer(
+        "♻️ Tiklash uchun o'qituvchini tanlang:",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(lambda c: c.data.startswith("restore_teacher_"))
+async def process_restore_teacher(
+        callback: CallbackQuery,
+        session: AsyncSession,
+        db_user,
+) -> None:
+    """Tanlangan arxivlangan o'qituvchini tiklash"""
+    is_superadmin = (db_user.role == UserRole.superadmin)
+    if not is_superadmin:
+        await callback.answer("⛔ Ruxsat yo'q", show_alert=True)
+        return
+
+    teacher_id = int(callback.data.replace("restore_teacher_", ""))
+
+    result = await session.execute(select(User).where(User.id == teacher_id))
+    teacher = result.scalar_one_or_none()
+
+    if not teacher:
+        await callback.message.edit_text("❌ O'qituvchi topilmadi.")
+        await callback.answer()
+        return
+
+    teacher_name = teacher.full_name or f"ID: {teacher.telegram_id}"
+
+    success = await restore_teacher(session, teacher.id)
+    if success:
+        await callback.message.edit_text(
+            f"✅ O'qituvchi tiklandi: {teacher_name}\n"
+            f"Endi u yana faol o'qituvchi sifatida botdan foydalana oladi."
+        )
+    else:
+        await callback.message.edit_text(f"❌ Tiklab bo'lmadi: {teacher_name}")
+
     await callback.answer()
 
 
@@ -2035,12 +2133,15 @@ async def cmd_stats(
         return
 
     # Umumiy statistika
-    users_count = await session.scalar(select(func.count()).select_from(User))
-    teachers_count = await session.scalar(select(func.count()).where(User.role == UserRole.teacher))
-    superadmins_count = await session.scalar(select(func.count()).where(User.role == UserRole.superadmin))
-    librarians_count = await session.scalar(select(func.count()).where(User.role == UserRole.librarian))
+    users_count = await session.scalar(select(func.count()).select_from(User).where(User.is_active.is_(True)))
+    teachers_count = await session.scalar(select(func.count()).where(User.role == UserRole.teacher, User.is_active.is_(True)))
+    superadmins_count = await session.scalar(select(func.count()).where(User.role == UserRole.superadmin, User.is_active.is_(True)))
+    librarians_count = await session.scalar(select(func.count()).where(User.role == UserRole.librarian, User.is_active.is_(True)))
     regular_users = await session.scalar(
-        select(func.count()).where((User.role == UserRole.student) | (User.role.is_(None)))
+        select(func.count()).where(
+            (User.role == UserRole.student) | (User.role.is_(None)),
+            User.is_active.is_(True),
+        )
     )
     tasks_count = await session.scalar(select(func.count()).select_from(Task))
 
@@ -2058,7 +2159,7 @@ async def cmd_stats(
         .join(Profile, User.id == Profile.bot_user_id)
         .join(Task, User.id == Task.teacher_id)
         .outerjoin(School, Profile.school_id == School.id)
-        .where(User.role == UserRole.teacher)
+        .where(User.role == UserRole.teacher, User.is_active.is_(True))
         .group_by(User.id, Profile.id, School.id)
         .order_by(func.count(Task.id).desc())
         .limit(10)

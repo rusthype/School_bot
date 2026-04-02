@@ -61,6 +61,16 @@ class UserContextMiddleware(BaseMiddleware):
             username=username  # YANGI: username parametri
         )
 
+        # Faol emasligini tekshirish — superadminlarga blok qo'llanmaydi
+        if not db_user.is_active and db_user.role != UserRole.superadmin and tg_user.id not in self._superadmin_ids:
+            from aiogram.types import Message as AiogramMessage, CallbackQuery as AiogramCQ
+            blocked_text = "⛔ Sizning akkauntingiz o'chirilgan. Admin bilan bog'laning."
+            if isinstance(event, AiogramMessage):
+                await event.answer(blocked_text)
+            elif isinstance(event, AiogramCQ):
+                await event.answer(blocked_text, show_alert=True)
+            return
+
         # Profilni olish (registratsiya/approval uchun)
         result = await session.execute(select(Profile).where(Profile.bot_user_id == db_user.id))
         profile = result.scalar_one_or_none()

@@ -139,6 +139,10 @@ async def approve_profile(
 
 
 async def revoke_teacher(session: AsyncSession, user_id: int) -> bool:
+    """Soft-delete a teacher: sets is_active=False and revokes their role/approval.
+
+    The user row is kept in the DB and can be restored by an admin.
+    """
     profile = await get_profile_by_user_id(session, user_id)
     user = await session.get(User, user_id)
 
@@ -153,7 +157,40 @@ async def revoke_teacher(session: AsyncSession, user_id: int) -> bool:
 
     if user and user.role == UserRole.teacher:
         user.role = None
+        user.is_active = False
         changed = True
+    elif user and not user.is_active:
+        # Already inactive — nothing to change
+        pass
+    elif user:
+        # Non-teacher user being soft-deleted
+        user.is_active = False
+        changed = True
+
+    if changed:
+        await session.commit()
+
+    return changed
+
+
+async def restore_teacher(session: AsyncSession, user_id: int) -> bool:
+    """Restore a previously soft-deleted teacher: sets is_active=True, role=teacher, is_approved=True."""
+    profile = await get_profile_by_user_id(session, user_id)
+    user = await session.get(User, user_id)
+
+    if not user:
+        return False
+
+    changed = False
+
+    user.is_active = True
+    user.role = UserRole.teacher
+    changed = True
+
+    if profile:
+        profile.is_approved = True
+        profile.removed_at = None
+        profile.rejected_at = None
 
     if changed:
         await session.commit()

@@ -58,6 +58,8 @@ class User(Base):
         nullable=False,
     )
 
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False, index=True)
+
     tasks: Mapped[list["Task"]] = relationship(back_populates="teacher", cascade="all,delete-orphan")
     profile: Mapped["Profile | None"] = relationship(
         back_populates="user",

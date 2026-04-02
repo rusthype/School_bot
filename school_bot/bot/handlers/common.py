@@ -217,6 +217,7 @@ def get_users_management_keyboard() -> ReplyKeyboardMarkup:
     builder.row(KeyboardButton(text="👨‍🏫 O'qituvchilar ro'yxati"))
     builder.row(KeyboardButton(text="⏳ Kutilayotganlar"))
     builder.row(KeyboardButton(text="❌ O'qituvchi o'chirish"))
+    builder.row(KeyboardButton(text="♻️ O'qituvchini tiklash"))
     builder.row(KeyboardButton(text="❌ Foydalanuvchi o'chirish"))
     builder.row(KeyboardButton(text="➕ Admin qo'shish"))
     builder.row(KeyboardButton(text="❌ Admin o'chirish"))
@@ -2829,13 +2830,16 @@ async def button_remove_teacher_inline(
     if not is_superadmin:
         await message.answer("⛔ Bu tugma faqat superadminlar uchun.")
         return
-    # Teacherlar ro'yxatini olish
+    # Faqat faol teacherlar ro'yxatini olish
     result = await session.execute(
-        select(User).where(User.role == UserRole.teacher).order_by(User.full_name)
+        select(User).where(
+            User.role == UserRole.teacher,
+            User.is_active.is_(True),
+        ).order_by(User.full_name)
     )
     teachers = result.scalars().all()
     if not teachers:
-        await message.answer("📭 Hozircha hech qanday o'qituvchi yo'q.")
+        await message.answer("📭 Hozircha hech qanday faol o'qituvchi yo'q.")
         return
     # Teacherlar ro'yxatini inline keyboard ko'rinishida ko'rsatish
     builder = InlineKeyboardBuilder()
@@ -2887,11 +2891,11 @@ async def process_remove_teacher_selection(
         "O'qituvchi olib tashlanmoqda",
         extra={"user_id": callback.from_user.id, "chat_id": callback.message.chat.id, "command": "remove_teacher", "target_name": teacher_name},
     )
-    # Teacherni o'chirish (profile va role ni yangilash)
+    # Teacherni soft-delete qilish (is_active=False, role=None)
     await revoke_teacher(session, teacher.id)
     await callback.message.edit_text(
-        f"✅ O'qituvchi olib tashlandi: {teacher_name}\n"
-        f"📊 Endi u oddiy foydalanuvchi."
+        f"✅ O'qituvchi o'chirildi (arxivlandi): {teacher_name}\n"
+        f"Tiklash uchun 'Foydalanuvchilar' → '♻️ O'qituvchini tiklash' tugmasidan foydalaning."
     )
     await state.clear()
     await callback.answer()
@@ -3052,6 +3056,23 @@ async def button_remove_teacher_fsm(
         return
     from school_bot.bot.handlers.admin import cmd_remove_teacher_start
     await cmd_remove_teacher_start(message, state, session, db_user)
+@router.message(F.text == "♻️ O'qituvchini tiklash")
+async def button_restore_teacher(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    db_user,
+    is_superadmin: bool = False,
+) -> None:
+    logger.info(
+        "Foydalanuvchi 'O'qituvchini tiklash' tugmasini bosdi",
+        extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "restore_teacher"},
+    )
+    if not is_superadmin:
+        await message.answer("⛔ Bu tugma faqat superadminlar uchun.")
+        return
+    from school_bot.bot.handlers.admin import cmd_restore_teacher_start
+    await cmd_restore_teacher_start(message, state, session, db_user)
 @router.message(F.text == "⏳ Kutilayotganlar")
 async def button_pending_approvals(
         message: Message,
