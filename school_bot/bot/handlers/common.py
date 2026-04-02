@@ -769,28 +769,21 @@ async def cmd_start(
 
     if not is_authorized:
         # Teacher registration flow for pending teacher profiles
-        if profile and (profile.profile_type or "teacher") == "teacher" and not profile.is_approved:
-            if can_register_again(profile):
-                await state.clear()
-                await state.update_data(reg_type="teacher")
-                await state.set_state(RegistrationStates.welcome)
-                await message.answer(
-                    "📝 Botdan foydalanish uchun ro'yxatdan o'tishingiz kerak. Ro'yxatdan o'tishni boshlaymizmi?",
-                    reply_markup=get_registration_start_keyboard(),
-                )
-                exec_ms = int((time.time() - start_time) * 1000)
-                logger.info(
-                    "Foydalanuvchi qayta ro'yxatdan o'tish jarayoniga yo'naltirildi",
-                    extra={"user_id": user_id, "chat_id": chat_id, "command": "start", "exec_ms": exec_ms},
-                )
-                return
+        if profile and not profile.is_approved:
+            await state.clear()
+            await state.set_state(RoleSelectStates.waiting_role)
+            role_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="👨\u200d🏫 O'qituvchi", callback_data="role_select:teacher"),
+                    InlineKeyboardButton(text="👨\u200d👩\u200d👧 Ota-ona", callback_data="role_select:parent"),
+                ],
+                [
+                    InlineKeyboardButton(text="🎓 O'quvchi", callback_data="role_select:student"),
+                ],
+            ])
             await message.answer(
-                "⏳ Ro'yxatdan o'tishingiz tasdiqlanishi kutilmoqda. Administrator tasdig'ini kuting."
-            )
-            exec_ms = int((time.time() - start_time) * 1000)
-            logger.info(
-                "Foydalanuvchi tasdiqlanishni kutish holatida",
-                extra={"user_id": user_id, "chat_id": chat_id, "command": "start", "exec_ms": exec_ms},
+                "Assalomu alaykum! Botga xush kelibsiz.\n\nIltimos, o'zingizning rolingizni tanlang:",
+                reply_markup=role_keyboard,
             )
             return
         await state.clear()
