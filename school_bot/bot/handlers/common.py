@@ -30,7 +30,7 @@ from school_bot.database.models import (
     BookOrder, BookOrderItem, BookCategory, TeacherAttendance, BotSettings,
 )
 from school_bot.bot.states.new_task import NewTaskStates
-from school_bot.bot.states.registration import RegistrationStates, RoleSelectStates, PostRoleRegistrationStates
+from school_bot.bot.states.registration import RegistrationStates, RoleSelectStates
 from school_bot.bot.states.book_states import CategoryAddStates
 from school_bot.bot.states.dashboard_states import (
     SearchStates,
@@ -854,7 +854,7 @@ async def handle_role_selection(
         session: AsyncSession,
         db_user,
 ) -> None:
-    """Yangi foydalanuvchi rol tanladi — ismini so'rash uchun ro'yxatdan o'tish oqimini boshlaydi."""
+    """Yangi foydalanuvchi rol tanladi — profilni saqlaydi va admin tasdiqlashini kutadi."""
     role = callback.data.split(":", 1)[1] if callback.data else ""
     if role == "student":
         await callback.answer(
@@ -875,110 +875,12 @@ async def handle_role_selection(
 
     await session.commit()
 
-    # Check if a profile with a non-empty first_name already exists.
-    # If so, skip the name/school collection steps entirely.
-    existing_profile = await get_profile_by_user_id(session, db_user.id)
-    if existing_profile and existing_profile.first_name and existing_profile.first_name.strip():
-        await state.clear()
-        await callback.message.edit_text(
-            "✅ Ma'lumotlaringiz qabul qilindi. Admin tasdiqlashini kuting."
-        )
-        await callback.answer()
-        logger.info(
-            "Foydalanuvchi mavjud profil bilan rol tanladi, kutish xabari ko'rsatildi",
-            extra={"user_id": db_user.telegram_id, "role": role},
-        )
-        return
-
-    # Store role in FSM so subsequent steps can use it
-    await state.set_data({"post_role_type": role})
-    await state.set_state(PostRoleRegistrationStates.waiting_name)
-
-    role_label = _ROLE_LABELS[role]
-    await callback.message.edit_text(
-        f"Siz {role_label} sifatida ro'yxatdan o'tyapsiz.\n\n"
-        "Ismingizni kiriting (to'liq ism):"
-    )
-    await callback.answer()
-    logger.info(
-        "Yangi foydalanuvchi rol tanladi, ism kutilmoqda",
-        extra={"user_id": db_user.telegram_id, "role": role},
-    )
-
-
-_NAME_RE = re.compile(r"^[\w\s'\-]{2,80}$", re.UNICODE)
-
-
-@router.message(PostRoleRegistrationStates.waiting_name, Command("cancel"))
-@router.message(PostRoleRegistrationStates.waiting_name, F.text == "❌ Bekor qilish")
-async def post_role_name_cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        "Ro'yxatdan o'tish bekor qilindi.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-
-
-@router.message(PostRoleRegistrationStates.waiting_name, F.text)
-async def post_role_name_handler(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    """Step 1: collect and validate the user's full name."""
-    name = (message.text or "").strip()
-    if not _NAME_RE.match(name):
-        await message.answer(
-            "Ism faqat harflar, bo'shliq, apostrof yoki tire bo'lishi mumkin. "
-            "Qayta kiriting:",
-            reply_markup=get_cancel_keyboard(),
-        )
-        return
-
-    await state.update_data(post_role_name=name)
-    await state.set_state(PostRoleRegistrationStates.waiting_school)
-    await message.answer(
-        "Maktabingizni kiriting (masalan: Qo'qon 7-maktab):",
-        reply_markup=get_cancel_keyboard(),
-    )
-
-
-@router.message(PostRoleRegistrationStates.waiting_school, Command("cancel"))
-@router.message(PostRoleRegistrationStates.waiting_school, F.text == "❌ Bekor qilish")
-async def post_role_school_cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        "Ro'yxatdan o'tish bekor qilindi.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-
-
-@router.message(PostRoleRegistrationStates.waiting_school, F.text)
-async def post_role_school_handler(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession,
-    db_user,
-) -> None:
-    """Step 2: collect school text, save profile, notify superadmins."""
-    school_text = (message.text or "").strip()
-    if not school_text:
-        await message.answer(
-            "Maktab nomini kiriting:",
-            reply_markup=get_cancel_keyboard(),
-        )
-        return
-
-    data = await state.get_data()
-    full_name = data.get("post_role_name", db_user.full_name or "")
-    role = data.get("post_role_type", "teacher")
-
-    # upsert_profile requires phone; use empty string for pending approvals
-    # Store school free-text in last_name column (temporary) so superadmins see it
+    # Create minimal pending profile immediately — no name/school collection
     profile = await upsert_profile(
         session,
         user_id=db_user.id,
-        first_name=full_name,
-        last_name=school_text,
+        first_name=db_user.full_name or "",
+        last_name="",
         phone="",
         school_id=None,
         profile_type=role,
@@ -986,23 +888,24 @@ async def post_role_school_handler(
 
     await state.clear()
 
-    await message.answer(
-        "Ma'lumotlaringiz qabul qilindi. Admin tasdiqlashini kuting.",
-        reply_markup=ReplyKeyboardRemove(),
+    role_label = _ROLE_LABELS[role]
+    await callback.message.edit_text(
+        f"✅ Siz {role_label} sifatida ro'yxatdan o'tdingiz. Admin tasdiqlashini kuting."
     )
+    await callback.answer()
 
     try:
-        await notify_superadmins_new_registration(session, message.bot, profile)
+        await notify_superadmins_new_registration(session, callback.bot, profile)
     except Exception:
         logger.error(
             "Superadminlarga ro'yxatdan o'tish xabari yuborilmadi",
             exc_info=True,
-            extra={"user_id": db_user.telegram_id, "command": "post_role_notify"},
+            extra={"user_id": db_user.telegram_id, "command": "role_select_notify"},
         )
 
     logger.info(
-        "Yangi foydalanuvchi ro'yxatdan o'tdi, tasdiqlash kutilmoqda",
-        extra={"user_id": db_user.telegram_id, "role": role, "school": school_text},
+        "Yangi foydalanuvchi rol tanladi, tasdiqlash kutilmoqda",
+        extra={"user_id": db_user.telegram_id, "role": role},
     )
 
 
