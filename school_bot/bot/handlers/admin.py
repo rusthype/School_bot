@@ -1852,7 +1852,8 @@ async def process_remove_teacher_selection(
     # Teacherni hard-delete qilish (DB dan butunlay o'chirish)
     from school_bot.database.models import BotProfile
     await session.execute(delete(BotProfile).where(BotProfile.bot_user_id == teacher.id))
-    await session.execute(delete(User).where(User.id == teacher.id))
+    from school_bot.database.models import BotUser as _BotUser
+    await session.execute(delete(_BotUser).where(_BotUser.id == teacher.id))
     await session.commit()
 
     await callback.message.edit_text(
