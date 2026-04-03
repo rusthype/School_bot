@@ -2658,6 +2658,8 @@ async def process_remove_teacher_selection(
         extra={"user_id": callback.from_user.id, "chat_id": callback.message.chat.id, "command": "remove_teacher", "target_name": teacher_name},
     )
     # Teacherni hard-delete qilish (DB dan butunlay o'chirish)
+    # Profile must be deleted before User to satisfy the FK constraint
+    await session.execute(delete(Profile).where(Profile.bot_user_id == teacher.id))
     await session.execute(delete(User).where(User.id == teacher.id))
     await session.commit()
     await callback.message.edit_text(
