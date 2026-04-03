@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
 
-from school_bot.bot.services.user_service import get_or_create_user, hard_delete_user_by_telegram_id
+from school_bot.bot.services.user_service import get_or_create_user
 from school_bot.database.models import Profile, UserRole
 from school_bot.bot.services.logger_service import get_logger
 
@@ -60,24 +60,6 @@ class UserContextMiddleware(BaseMiddleware):
             full_name=full_name,
             username=username  # YANGI: username parametri
         )
-
-        # Faol emasligini tekshirish — superadminlarga blok qo'llanmaydi.
-        # is_active=False bo'lgan foydalanuvchilar uchun ikkala yozuv (bot_users va bot_profiles)
-        # hard-delete qilinadi, so'ngra ular yangi foydalanuvchi sifatida davom etadilar.
-        if not db_user.is_active and db_user.role != UserRole.superadmin and tg_user.id not in self._superadmin_ids:
-            deleted = await hard_delete_user_by_telegram_id(session=session, telegram_id=tg_user.id)
-            if deleted:
-                logger.info(
-                    f"Nofaol foydalanuvchi hard-delete qilindi, yangi foydalanuvchi sifatida qayta ro'yxatdan o'tadi: "
-                    f"telegram_id={tg_user.id}"
-                )
-            # Yangi foydalanuvchi sifatida qayta yaratish
-            db_user = await get_or_create_user(
-                session=session,
-                telegram_id=tg_user.id,
-                full_name=full_name,
-                username=username,
-            )
 
         # Profilni olish (registratsiya/approval uchun)
         result = await session.execute(select(Profile).where(Profile.bot_user_id == db_user.id))

@@ -22,7 +22,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, select
+from sqlalchemy import func, select, delete
 from sqlalchemy.engine.url import make_url
 from datetime import datetime
 from school_bot.database.models import (
@@ -43,7 +43,6 @@ from school_bot.bot.config import Settings
 from school_bot.bot.services.profile_service import (
     upsert_profile,
     can_register_again,
-    revoke_teacher,
     get_profile_by_user_id,
     update_teacher_profile,
 )
@@ -216,7 +215,6 @@ def get_users_management_keyboard() -> ReplyKeyboardMarkup:
     builder.row(KeyboardButton(text="👨‍🏫 O'qituvchilar ro'yxati"))
     builder.row(KeyboardButton(text="⏳ Kutilayotganlar"))
     builder.row(KeyboardButton(text="❌ O'qituvchi o'chirish"))
-    builder.row(KeyboardButton(text="♻️ O'qituvchini tiklash"))
     builder.row(KeyboardButton(text="❌ Foydalanuvchi o'chirish"))
     builder.row(KeyboardButton(text="➕ Admin qo'shish"))
     builder.row(KeyboardButton(text="❌ Admin o'chirish"))
@@ -2599,16 +2597,15 @@ async def button_remove_teacher_inline(
     if not is_superadmin:
         await message.answer("⛔ Bu tugma faqat superadminlar uchun.")
         return
-    # Faqat faol teacherlar ro'yxatini olish
+    # Teacherlar ro'yxatini olish
     result = await session.execute(
         select(User).where(
             User.role == UserRole.teacher,
-            User.is_active.is_(True),
         ).order_by(User.full_name)
     )
     teachers = result.scalars().all()
     if not teachers:
-        await message.answer("📭 Hozircha hech qanday faol o'qituvchi yo'q.")
+        await message.answer("📭 Hozircha hech qanday o'qituvchi yo'q.")
         return
     # Teacherlar ro'yxatini inline keyboard ko'rinishida ko'rsatish
     builder = InlineKeyboardBuilder()
@@ -2660,11 +2657,11 @@ async def process_remove_teacher_selection(
         "O'qituvchi olib tashlanmoqda",
         extra={"user_id": callback.from_user.id, "chat_id": callback.message.chat.id, "command": "remove_teacher", "target_name": teacher_name},
     )
-    # Teacherni soft-delete qilish (is_active=False, role=None)
-    await revoke_teacher(session, teacher.id)
+    # Teacherni hard-delete qilish (DB dan butunlay o'chirish)
+    await session.execute(delete(User).where(User.id == teacher.id))
+    await session.commit()
     await callback.message.edit_text(
-        f"✅ O'qituvchi o'chirildi (arxivlandi): {teacher_name}\n"
-        f"Tiklash uchun 'Foydalanuvchilar' → '♻️ O'qituvchini tiklash' tugmasidan foydalaning."
+        f"✅ O'qituvchi o'chirildi: {teacher_name}"
     )
     await state.clear()
     await callback.answer()
@@ -2825,23 +2822,6 @@ async def button_remove_teacher_fsm(
         return
     from school_bot.bot.handlers.admin import cmd_remove_teacher_start
     await cmd_remove_teacher_start(message, state, session, db_user)
-@router.message(F.text == "♻️ O'qituvchini tiklash")
-async def button_restore_teacher(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession,
-    db_user,
-    is_superadmin: bool = False,
-) -> None:
-    logger.info(
-        "Foydalanuvchi 'O'qituvchini tiklash' tugmasini bosdi",
-        extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "restore_teacher"},
-    )
-    if not is_superadmin:
-        await message.answer("⛔ Bu tugma faqat superadminlar uchun.")
-        return
-    from school_bot.bot.handlers.admin import cmd_restore_teacher_start
-    await cmd_restore_teacher_start(message, state, session, db_user)
 @router.message(F.text == "⏳ Kutilayotganlar")
 async def button_pending_approvals(
         message: Message,
