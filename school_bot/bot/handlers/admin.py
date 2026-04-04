@@ -1850,7 +1850,8 @@ async def process_remove_teacher_selection(
     )
 
     # Teacherni hard-delete qilish (DB dan butunlay o'chirish)
-    # Profile must be deleted before User to satisfy the FK constraint
+    # Delete in FK order: Tasks → Profile → User
+    await session.execute(delete(Task).where(Task.teacher_id == teacher.id))
     await session.execute(delete(Profile).where(Profile.bot_user_id == teacher.id))
     await session.execute(delete(User).where(User.id == teacher.id))
     await session.commit()
