@@ -444,59 +444,65 @@ async def invalid_notes(message: Message) -> None:
 
 @router.poll_answer()
 async def handle_poll_answer(poll_answer: PollAnswer, session: AsyncSession) -> None:
-    poll_id = poll_answer.poll_id
-    if not poll_id:
-        return
+    try:
+        poll_id = poll_answer.poll_id
+        if not poll_id:
+            return
 
-    task_res = await session.execute(
-        select(Task).where(Task.poll_id == poll_id)
-    )
-    task = task_res.scalar_one_or_none()
-    if not task:
-        return
-
-    tg_user = poll_answer.user
-    full_name = " ".join(
-        part for part in [tg_user.first_name, tg_user.last_name] if part
-    ).strip() or None
-    user = await get_or_create_user(
-        session=session,
-        telegram_id=tg_user.id,
-        full_name=full_name,
-        username=tg_user.username,
-    )
-
-    await session.execute(
-        delete(PollVote).where(
-            PollVote.poll_id == poll_id,
-            PollVote.user_id == user.id,
+        task_res = await session.execute(
+            select(Task).where(Task.poll_id == poll_id)
         )
-    )
+        task = task_res.scalar_one_or_none()
+        if not task:
+            return
 
-    if not poll_answer.option_ids:
-        await session.commit()
-        return
-
-    votes: list[PollVote] = []
-    for option_id in poll_answer.option_ids:
-        option_text = (
-            POLL_OPTIONS[option_id]
-            if option_id < len(POLL_OPTIONS)
-            else f"Variant {option_id + 1}"
+        tg_user = poll_answer.user
+        full_name = " ".join(
+            part for part in [tg_user.first_name, tg_user.last_name] if part
+        ).strip() or None
+        user = await get_or_create_user(
+            session=session,
+            telegram_id=tg_user.id,
+            full_name=full_name,
+            username=tg_user.username,
         )
-        votes.append(
-            PollVote(
-                poll_message_id=task.poll_message_id,
-                poll_id=poll_id,
-                task_id=task.id,
-                user_id=user.id,
-                option_id=option_id,
-                option_text=option_text,
+
+        await session.execute(
+            delete(PollVote).where(
+                PollVote.poll_id == poll_id,
+                PollVote.user_id == user.id,
             )
         )
 
-    session.add_all(votes)
-    await session.commit()
+        if not poll_answer.option_ids:
+            await session.commit()
+            return
+
+        votes: list[PollVote] = []
+        for option_id in poll_answer.option_ids:
+            option_text = (
+                POLL_OPTIONS[option_id]
+                if option_id < len(POLL_OPTIONS)
+                else f"Variant {option_id + 1}"
+            )
+            votes.append(
+                PollVote(
+                    poll_message_id=task.poll_message_id,
+                    poll_id=poll_id,
+                    task_id=task.id,
+                    user_id=user.id,
+                    option_id=option_id,
+                    option_text=option_text,
+                )
+            )
+
+        session.add_all(votes)
+        await session.commit()
+    except Exception:
+        logger.exception(
+            "handle_poll_answer failed",
+            extra={"poll_id": getattr(poll_answer, "poll_id", None)},
+        )
 
 
 @router.message(Command("poll_voters"))

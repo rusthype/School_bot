@@ -218,13 +218,13 @@ async def admin_status_comment(
         return
     order.status = new_status
     order.updated_at = datetime.now(timezone.utc)
-    order.updated_by = db_user.id
+    order.updated_by_id = db_user.id
     session.add(
         OrderStatusHistory(
             order_id=order.id,
             old_status=old_status or "",
             new_status=new_status,
-            changed_by=db_user.id,
+            changed_by_id=db_user.id,
             comment=comment,
         )
     )

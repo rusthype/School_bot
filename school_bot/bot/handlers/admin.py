@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, StateFilter, BaseFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,7 +54,13 @@ from school_bot.bot.utils.parser import parse_telegram_input
 from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.services.pagination import SchoolPagination
 from school_bot.bot.states.group_management import GroupManagementStates
-from school_bot.bot.states.admin_states import AddTeacherManualStates, TeacherEditStates
+from school_bot.bot.states.admin_states import (
+    AddTeacherManualStates,
+    AddTeacherByIdStates,
+    RemoveTeacherStates,
+    RejectTeacherStates,
+    TeacherEditStates,
+)
 from school_bot.database.models import User, UserRole, Task, Profile, School, PollVote
 from school_bot.bot.handlers.group_join import _build_group_join_school_keyboard
 from school_bot.bot.handlers.common import (
@@ -67,6 +73,7 @@ from school_bot.bot.handlers.common import (
 
 MAX_TG_MESSAGE = 4000
 _STALE_APPROVAL_MSG = "Bu so'rov allaqachon ko'rib chiqilgan yoki muddati o'tgan."
+POLLS_PAGE_SIZE = 20
 
 
 def _split_message(text: str, limit: int = MAX_TG_MESSAGE):
@@ -246,7 +253,7 @@ async def show_all_polls_list(
         select(Task)
         .where(Task.poll_id.is_not(None))
         .order_by(Task.created_at.desc())
-        .limit(20)
+        .limit(POLLS_PAGE_SIZE)
     )
     polls = result.scalars().all()
     if not polls:
@@ -396,17 +403,6 @@ def _build_school_paged_keyboard(prefix: str, schools: list, page: int, per_page
     builder.adjust(5)
     return builder
 
-
-class AddTeacherStates(StatesGroup):
-    waiting_for_input = State()
-
-
-class RemoveTeacherStates(StatesGroup):
-    waiting_for_selection = State()
-
-
-class RejectTeacherStates(StatesGroup):
-    waiting_reason = State()
 
 
 @router.message(Command(commands=["pending_approvals", "kutayotganlar"]))
@@ -633,7 +629,7 @@ async def admin_poll_cancel(
 @router.message(
     Command("cancel"),
     StateFilter(
-        AddTeacherStates, RemoveTeacherStates, GroupManagementStates,
+        AddTeacherByIdStates, RemoveTeacherStates, GroupManagementStates,
         RejectTeacherStates, TeacherEditStates,
     ),
 )
@@ -1081,13 +1077,13 @@ async def cmd_add_teacher_start(
         await message.answer("⛔ Siz o'qituvchilarni boshqarish huquqiga ega emassiz.")
         return
 
-    await state.set_state(AddTeacherStates.waiting_for_input)
+    await state.set_state(AddTeacherByIdStates.waiting_for_input)
     await message.answer(
         "➕ O'qituvchi Telegram ID sini kiriting:\n\n/cancel — bekor qilish"
     )
 
 
-@router.message(StateFilter(AddTeacherStates.waiting_for_input))
+@router.message(StateFilter(AddTeacherByIdStates.waiting_for_input))
 async def cmd_add_teacher_process(
         message: Message,
         state: FSMContext,

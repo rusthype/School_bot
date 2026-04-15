@@ -98,6 +98,7 @@ class Task(Base):
 class PollVote(Base):
     __tablename__ = "bot_poll_votes"
     __table_args__ = (
+        UniqueConstraint("user_id", "poll_id", name="uq_poll_vote_user_poll"),
         Index("ix_bot_poll_votes_user_poll", "user_id", "poll_id"),
         Index("ix_bot_poll_votes_task_option", "task_id", "option_id"),
     )
@@ -184,6 +185,7 @@ class BookOrder(Base):
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+        server_default=func.now(),
         onupdate=func.now(),
         index=True,
     )

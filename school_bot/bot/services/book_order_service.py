@@ -29,7 +29,7 @@ async def create_book_order(
         delivery_deadline=default_deadline,
         escalated=False,
         updated_at=datetime.now(timezone.utc),
-        updated_by=teacher_id,
+        updated_by_id=teacher_id,
     )
     session.add(order)
     await session.flush()
@@ -44,7 +44,7 @@ async def create_book_order(
             order_id=order.id,
             old_status="",
             new_status="pending",
-            changed_by=teacher_id,
+            changed_by_id=teacher_id,
             comment="Buyurtma yaratildi",
         )
     )
@@ -119,13 +119,13 @@ async def confirm_order(
     order.confirmed_at = datetime.now(timezone.utc)
     order.librarian_id = librarian_id
     order.updated_at = datetime.now(timezone.utc)
-    order.updated_by = librarian_id
+    order.updated_by_id = librarian_id
     session.add(
         OrderStatusHistory(
             order_id=order.id,
             old_status=old_status,
             new_status=order.status,
-            changed_by=librarian_id,
+            changed_by_id=librarian_id,
             comment="Tasdiqlandi",
         )
     )
@@ -143,13 +143,13 @@ async def mark_processing(
     order.status = "processing"
     order.librarian_id = librarian_id
     order.updated_at = datetime.now(timezone.utc)
-    order.updated_by = librarian_id
+    order.updated_by_id = librarian_id
     session.add(
         OrderStatusHistory(
             order_id=order.id,
             old_status=old_status,
             new_status=order.status,
-            changed_by=librarian_id,
+            changed_by_id=librarian_id,
             comment="Jarayonda",
         )
     )
@@ -167,13 +167,13 @@ async def reject_order(
     order.status = "rejected"
     order.librarian_id = librarian_id
     order.updated_at = datetime.now(timezone.utc)
-    order.updated_by = librarian_id
+    order.updated_by_id = librarian_id
     session.add(
         OrderStatusHistory(
             order_id=order.id,
             old_status=old_status,
             new_status=order.status,
-            changed_by=librarian_id,
+            changed_by_id=librarian_id,
             comment="Rad etildi",
         )
     )
@@ -190,16 +190,16 @@ async def mark_delivered(
     old_status = order.status
     order.status = "delivered"
     order.delivered_at = datetime.now(timezone.utc)
-    order.delivered_by = librarian_id
+    order.delivered_by_id = librarian_id
     order.librarian_id = librarian_id
     order.updated_at = datetime.now(timezone.utc)
-    order.updated_by = librarian_id
+    order.updated_by_id = librarian_id
     session.add(
         OrderStatusHistory(
             order_id=order.id,
             old_status=old_status,
             new_status=order.status,
-            changed_by=librarian_id,
+            changed_by_id=librarian_id,
             comment="Yetkazildi",
         )
     )

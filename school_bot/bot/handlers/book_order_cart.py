@@ -743,13 +743,22 @@ async def _finalize_order(
     priority = data.get("priority") or "normal"
     priority_full, priority_short = _priority_meta(priority)
 
-    order = await create_book_order(
-        session=session,
-        teacher_id=db_user.id,
-        items=[(int(bid), qty) for bid, qty in items],
-        notes=None,
-        priority=priority,
-    )
+    try:
+        order = await create_book_order(
+            session=session,
+            teacher_id=db_user.id,
+            items=[(int(bid), qty) for bid, qty in items],
+            notes=None,
+            priority=priority,
+        )
+    except Exception:
+        await session.rollback()
+        logger.exception(
+            "create_book_order failed",
+            extra={"user_id": callback.from_user.id, "command": "order_books"},
+        )
+        await callback.answer("❌ Buyurtma yaratib bo'lmadi. Qayta urinib ko'ring.", show_alert=True)
+        return
 
     school_name = "Noma'lum"
     groups_text = ""
@@ -930,6 +939,7 @@ async def book_order_back_to_main(
     await message.answer("Asosiy menyu", reply_markup=keyboard)
 
 
+@router.message(StateFilter(BookOrderStates), Command("cancel"))
 @router.message(StateFilter(BookOrderStates), F.text == "❌ /cancel")
 @router.message(StateFilter(BookOrderStates), F.text == "❌ Bekor qilish")
 async def cancel_book_order_button(

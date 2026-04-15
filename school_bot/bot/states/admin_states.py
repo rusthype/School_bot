@@ -39,3 +39,15 @@ class TeacherSelfEditStates(StatesGroup):
 
 class AddTeacherStates(StatesGroup):
     waiting_telegram_id = State()
+
+
+class AddTeacherByIdStates(StatesGroup):
+    waiting_for_input = State()
+
+
+class RemoveTeacherStates(StatesGroup):
+    waiting_for_selection = State()
+
+
+class RejectTeacherStates(StatesGroup):
+    waiting_reason = State()

@@ -1,10 +1,6 @@
 import re
 import time
 import asyncio
-import os
-import shutil
-import tarfile
-from pathlib import Path
 from typing import Union
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
@@ -18,12 +14,11 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     BufferedInputFile,
-    FSInputFile,
 )
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select, delete
-from sqlalchemy.engine.url import make_url
+
 from datetime import datetime
 from school_bot.database.models import (
     User, UserRole, Task, School, PollVote, Profile, Book,
@@ -39,7 +34,7 @@ from school_bot.bot.states.dashboard_states import (
     SendMessageStates,
     PrivacySettingsStates,
 )
-from school_bot.bot.config import Settings
+
 from school_bot.bot.services.profile_service import (
     upsert_profile,
     can_register_again,
@@ -123,8 +118,7 @@ async def _get_superadmin_overview(session: AsyncSession):
         task_count=task_count,
         db_size_mb=db_size_mb,
     )
-class RemoveTeacherStates:
-    waiting_for_selection = "waiting_for_selection"
+
 def get_teacher_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.row(
@@ -167,10 +161,7 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
         KeyboardButton(text="⚙️ Bot sozlamalari"),
         KeyboardButton(text="📢 Xabarnoma"),
     )
-    builder.row(
-        KeyboardButton(text="📥 Backup"),
-        KeyboardButton(text="❓ Yordam"),
-    )
+    builder.row(KeyboardButton(text="❓ Yordam"))
     builder.row(KeyboardButton(text="🏠 Bosh menyu"))
     return builder.as_markup(resize_keyboard=True, input_field_placeholder="👇 Menyudan tanlang...")
 def get_librarian_keyboard() -> ReplyKeyboardMarkup:
@@ -319,21 +310,13 @@ async def cancel_current_action(
             await target.message.answer("✅ Jarayon bekor qilindi.", reply_markup=keyboard)
         await target.answer()
         return
-    # Message flow: try edit last prompt, fall back to previous message
+    # Message flow: try edit last prompt, fall back to fresh answer
     edited = False
     if last_prompt_id:
         edited = await _try_edit_prompt(
             target.bot,
             target.chat.id,
             last_prompt_id,
-            "✅ Jarayon bekor qilindi.",
-            reply_markup=keyboard,
-        )
-    if not edited:
-        edited = await _try_edit_prompt(
-            target.bot,
-            target.chat.id,
-            target.message_id - 1,
             "✅ Jarayon bekor qilindi.",
             reply_markup=keyboard,
         )
@@ -367,14 +350,6 @@ async def exit_to_main_menu(
             message.bot,
             message.chat.id,
             last_prompt_id,
-            notice or "Asosiy menyu",
-            reply_markup=keyboard,
-        )
-    if not edited:
-        edited = await _try_edit_prompt(
-            message.bot,
-            message.chat.id,
-            message.message_id - 1,
             notice or "Asosiy menyu",
             reply_markup=keyboard,
         )
@@ -2157,85 +2132,7 @@ async def broadcast_confirm_cb(
         pass
     await callback.message.answer("Asosiy menyu:", reply_markup=builder.build_main_keyboard())
     await callback.answer()
-@router.message(F.text == "📥 Backup")
-async def admin_backup(message: Message, is_superadmin: bool = False) -> None:
-    if not is_superadmin:
-        return
-    loading = await message.answer("⏳ Backup tayyorlanmoqda...")
-    try:
-        settings = Settings()
-        url = make_url(settings.alochi_db_url)
-        db_name = url.database
-        db_user = url.username or ""
-        db_password = url.password or ""
-        db_host = url.host or "localhost"
-        db_port = str(url.port or 5432)
-        if not shutil.which("pg_dump"):
-            await loading.edit_text("❌ pg_dump topilmadi. Serverda postgresql-client o'rnatilmagan.")
-            return
-        project_root = Path(__file__).resolve().parents[3]
-        backup_dir = project_root / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        tmp_dir = backup_dir / f"tmp_{timestamp}"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        db_dump_file = tmp_dir / f"db_{db_name}_{timestamp}.sql"
-        env = os.environ.copy()
-        if db_password:
-            env["PGPASSWORD"] = db_password
-        proc = await asyncio.create_subprocess_exec(
-            "pg_dump",
-            "-h", db_host,
-            "-p", db_port,
-            "-U", db_user,
-            "-d", db_name,
-            "-f", str(db_dump_file),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            err = (stderr or b"").decode("utf-8", errors="ignore")
-            await loading.edit_text(f"❌ Backup xatosi: {err[:400]}")
-            return
-        include_dirs = []
-        photos_dir = project_root / "photos"
-        covers_dir = project_root / "covers"
-        if photos_dir.exists():
-            include_dirs.append((photos_dir, "photos"))
-        if covers_dir.exists():
-            include_dirs.append((covers_dir, "covers"))
-        files_root = tmp_dir / "files"
-        files_root.mkdir(parents=True, exist_ok=True)
-        for src, name in include_dirs:
-            dest = files_root / name
-            if dest.exists():
-                shutil.rmtree(dest, ignore_errors=True)
-            shutil.copytree(src, dest)
-        archive_name = f"backup_{db_name}_{timestamp}.tar.gz"
-        archive_path = backup_dir / archive_name
-        with tarfile.open(archive_path, "w:gz") as tar:
-            tar.add(db_dump_file, arcname=db_dump_file.name)
-            if include_dirs:
-                tar.add(files_root, arcname="files")
-        await message.answer_document(
-            FSInputFile(str(archive_path)),
-            caption=(
-                f"✅ Backup tayyor: {archive_name}\n"
-                f"• DB: {db_dump_file.name}\n"
-                f"• Photos: {'ha' if photos_dir.exists() else 'yoq'}\n"
-                f"• Covers: {'ha' if covers_dir.exists() else 'yoq'}"
-            ),
-        )
-        await loading.delete()
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-    except Exception as exc:
-        logger.exception("Backup failed: %s", exc)
-        try:
-            await loading.edit_text("❌ Backup yaratib bo'lmadi.")
-        except Exception:
-            pass
+
 @router.message(F.text == "📋 Loglar")
 async def admin_logs(message: Message, is_superadmin: bool = False) -> None:
     if not is_superadmin:
