@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
+from aiogram.types import PollAnswer, TelegramObject
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
@@ -107,6 +107,18 @@ class UserContextMiddleware(BaseMiddleware):
             is_superadmin = True
             is_teacher = False
             is_librarian = False
+
+        # poll_answer eventlari uchun student blokini o'tkazib yuborish
+        # (ovoz berish — faqat o'quvchilar uchun, o'qituvchi emas)
+        if isinstance(event, PollAnswer):
+            data["db_user"] = db_user
+            data["is_superadmin"] = is_superadmin
+            data["is_teacher"] = is_teacher
+            data["is_librarian"] = is_librarian
+            data["is_student"] = False
+            data["is_group_admin"] = is_group_admin
+            data["profile"] = profile
+            return await handler(event, data)
 
         # O'quvchi roli bu botda qo'llab-quvvatlanmaydi — faqat o'qituvchilar uchun bot.
         # Agar foydalanuvchi student roliga ega bo'lsa, blok xabar yuboriladi.
