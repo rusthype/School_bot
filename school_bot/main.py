@@ -158,7 +158,19 @@ async def main() -> None:
     dp.include_router(common.router)
 
     logging.info("Starting bot...")
-    await dp.start_polling(bot)
+    await dp.start_polling(
+        bot,
+        allowed_updates=[
+            "message",
+            "callback_query",
+            "poll_answer",
+            "poll",
+            "my_chat_member",
+            "chat_member",
+            "inline_query",
+            "chosen_inline_result",
+        ]
+    )
 
 
 async def start_log_cleanup_watch(settings: Settings) -> None:
