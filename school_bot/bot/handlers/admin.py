@@ -291,9 +291,7 @@ async def admin_poll_all_view(
         return
 
     task = (await session.execute(
-        select(Task)
-        .where(Task.id == task_id)
-        .options(selectinload(Task.poll_votes).selectinload(PollVote.user))
+        select(Task).where(Task.id == task_id)
     )).scalar_one_or_none()
 
     if not task:
@@ -302,12 +300,20 @@ async def admin_poll_all_view(
     if not task.poll_id:
         await callback.answer("📭 Bu topshiriq uchun so'rovnoma yo'q.", show_alert=True)
         return
-    if not task.poll_votes:
+
+    votes = (await session.execute(
+        select(PollVote)
+        .where(PollVote.poll_id == task.poll_id)
+        .options(selectinload(PollVote.user))
+        .order_by(PollVote.voted_at)
+    )).scalars().all()
+
+    if not votes:
         await callback.answer("📭 Bu topshiriq uchun hali ovoz berilmagan.", show_alert=True)
         return
 
     from school_bot.bot.handlers.teacher import format_poll_voters
-    text = format_poll_voters(task)
+    text = format_poll_voters(task, votes=list(votes))
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔙 Ortga", callback_data="admin_poll_all_back"))
@@ -478,9 +484,7 @@ async def view_poll_voters_admin(
         return
 
     task = (await session.execute(
-        select(Task)
-        .where(Task.id == task_id)
-        .options(selectinload(Task.poll_votes).selectinload(PollVote.user))
+        select(Task).where(Task.id == task_id)
     )).scalar_one_or_none()
 
     if not task:
@@ -491,12 +495,19 @@ async def view_poll_voters_admin(
         await callback.answer("📭 Bu topshiriq uchun so'rovnoma yo'q.", show_alert=True)
         return
 
-    if not task.poll_votes:
+    votes = (await session.execute(
+        select(PollVote)
+        .where(PollVote.poll_id == task.poll_id)
+        .options(selectinload(PollVote.user))
+        .order_by(PollVote.voted_at)
+    )).scalars().all()
+
+    if not votes:
         await callback.answer("📭 Bu topshiriq uchun hali ovoz berilmagan.", show_alert=True)
         return
 
     from school_bot.bot.handlers.teacher import format_poll_voters
-    text = format_poll_voters(task)
+    text = format_poll_voters(task, votes=list(votes))
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔙 Ortga", callback_data="admin_poll_back_to_polls"))

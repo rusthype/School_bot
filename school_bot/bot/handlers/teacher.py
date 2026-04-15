@@ -573,9 +573,11 @@ async def poll_voters_callback(
     await callback.answer()
 
 
-def format_poll_voters(task: Task) -> str:
+def format_poll_voters(task: Task, votes: list[PollVote] | None = None) -> str:
+    if votes is None:
+        votes = list(task.poll_votes)
     votes_by_option: dict[int, list[PollVote]] = {}
-    for vote in task.poll_votes:
+    for vote in votes:
         votes_by_option.setdefault(vote.option_id, []).append(vote)
 
     safe_topic = html.escape(task.topic or "")
@@ -589,7 +591,7 @@ def format_poll_voters(task: Task) -> str:
     lines.extend(
         [
             "",
-            f"<b>Jami ovozlar: {len(task.poll_votes)} ta</b>",
+            f"<b>Jami ovozlar: {len(votes)} ta</b>",
         ]
     )
 
@@ -623,11 +625,7 @@ async def show_poll_voters(
     teacher_id: uuid.UUID,
     is_superadmin: bool = False,
 ) -> None:
-    stmt = (
-        select(Task)
-        .where(Task.id == task_id)
-        .options(selectinload(Task.poll_votes).selectinload(PollVote.user))
-    )
+    stmt = select(Task).where(Task.id == task_id)
     if not is_superadmin:
         stmt = stmt.where(Task.teacher_id == teacher_id)
 
@@ -640,11 +638,18 @@ async def show_poll_voters(
         await message.answer("📭 Bu topshiriq uchun so'rovnoma yo'q.")
         return
 
-    if not task.poll_votes:
+    votes = (await session.execute(
+        select(PollVote)
+        .where(PollVote.poll_id == task.poll_id)
+        .options(selectinload(PollVote.user))
+        .order_by(PollVote.voted_at)
+    )).scalars().all()
+
+    if not votes:
         await message.answer("📭 Bu topshiriq uchun hali ovoz berilmagan.")
         return
 
-    text = format_poll_voters(task)
+    text = format_poll_voters(task, votes=list(votes))
     await message.answer(text)
 
 
