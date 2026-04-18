@@ -50,8 +50,31 @@ from school_bot.bot.services.pagination import SchoolPagination
 from school_bot.bot.utils.telegram import send_chunked_message
 from school_bot.bot.services.bot_settings_service import get_or_create_settings, update_settings
 from school_bot.bot.services.book_order_service import get_order_stats
+from school_bot.bot.utils.subscription import check_subscription
+from school_bot.bot.config import Settings
 router = Router(name=__name__)
 logger = get_logger(__name__)
+
+# Loaded once per process — picks up REQUIRED_CHANNEL from env.
+_settings = Settings()
+
+
+def _build_subscribe_prompt(channel: str) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the 'please subscribe' message + inline keyboard for /start gate."""
+    text = (
+        "📢 Botdan foydalanish uchun kanalga obuna bo'ling!\n"
+        f"{channel}"
+    )
+    # Build a channel URL from @username. If someone configures a numeric id here
+    # we skip the URL button and only show the re-check button.
+    url: str | None = None
+    if channel.startswith("@"):
+        url = f"https://t.me/{channel.lstrip('@')}"
+    rows: list[list[InlineKeyboardButton]] = []
+    if url:
+        rows.append([InlineKeyboardButton(text="📢 Kanalga o'tish", url=url)])
+    rows.append([InlineKeyboardButton(text="✅ Obuna bo'ldim", callback_data="check_sub")])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
 from collections import OrderedDict
 
 
@@ -700,6 +723,21 @@ async def cmd_start(
         "Foydalanuvchi /start buyrug'ini yubordi",
         extra={"user_id": user_id, "chat_id": chat_id, "command": "start"},
     )
+
+    # Mandatory channel subscription gate — runs BEFORE any menu/registration flow.
+    # Superadmins are exempt so a misconfigured channel cannot lock the owner out.
+    required_channel = (_settings.required_channel or "").strip()
+    if required_channel and not is_superadmin and message.from_user is not None:
+        subscribed = await check_subscription(
+            bot=message.bot,
+            user_id=message.from_user.id,
+            channel=required_channel,
+        )
+        if not subscribed:
+            text, markup = _build_subscribe_prompt(required_channel)
+            await message.answer(text, reply_markup=markup)
+            return
+
     await state.update_data(menu_active=False)
     is_authorized = bool(is_superadmin or is_teacher or is_librarian or is_group_admin)
 
@@ -796,6 +834,128 @@ async def cmd_start(
         "/start buyrug'i bajarildi",
         extra={"user_id": user_id, "chat_id": chat_id, "command": "start", "exec_ms": exec_ms},
     )
+
+
+@router.callback_query(F.data == "check_sub")
+async def check_sub_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    db_user,
+    profile,
+    is_superadmin: bool = False,
+    is_teacher: bool = False,
+    is_librarian: bool = False,
+    is_group_admin: bool = False,
+) -> None:
+    """Re-check subscription on 'Obuna bo'ldim' press and, if OK, drop into main flow."""
+    if callback.from_user is None:
+        await callback.answer()
+        return
+
+    required_channel = (_settings.required_channel or "").strip()
+    if required_channel and not is_superadmin:
+        subscribed = await check_subscription(
+            bot=callback.bot,
+            user_id=callback.from_user.id,
+            channel=required_channel,
+        )
+        if not subscribed:
+            await callback.answer(
+                "Hali obuna bo'lmagansiz!",
+                show_alert=True,
+            )
+            return
+
+    # Subscribed (or channel disabled, or user is superadmin) — remove the prompt
+    # and run the same flow as /start would. We re-dispatch manually because we
+    # have no Message here; the callback message is what we delete.
+    try:
+        if callback.message is not None:
+            await callback.message.delete()
+    except Exception:
+        # Message may already be gone or too old to delete — ignore.
+        pass
+    await callback.answer()
+
+    if callback.message is None:
+        return
+
+    # Mimic the body of cmd_start after the subscription gate.
+    await state.update_data(menu_active=False)
+    is_authorized = bool(is_superadmin or is_teacher or is_librarian or is_group_admin)
+
+    if not is_authorized:
+        if profile is not None and profile.is_approved:
+            await state.clear()
+            await callback.message.answer(
+                "⏳ Sizning so'rovingiz ko'rib chiqilmoqda. Iltimos, administrator tasdig'ini kuting.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
+        await state.clear()
+        await state.set_state(RegistrationStates.welcome)
+        await callback.message.answer(
+            "Assalomu alaykum! Botga xush kelibsiz.\n\nRo'yxatdan o'tishni boshlaymizmi?",
+            reply_markup=get_registration_start_keyboard(),
+        )
+        return
+
+    if not is_superadmin and profile is not None and not profile.is_approved:
+        await state.clear()
+        await state.set_state(RegistrationStates.welcome)
+        await callback.message.answer(
+            "Assalomu alaykum! Botga xush kelibsiz.\n\nRo'yxatdan o'tishni boshlaymizmi?",
+            reply_markup=get_registration_start_keyboard(),
+        )
+        return
+
+    await state.clear()
+    await state.update_data(menu_active=True)
+
+    if is_superadmin:
+        builder = SuperAdminMenuBuilder()
+        await callback.message.answer(
+            builder.build_dashboard_text(
+                await _get_superadmin_overview(session)
+            ),
+            reply_markup=builder.build_main_keyboard(),
+        )
+        return
+
+    lines: list[str] = [
+        "📚 **Maktab topshiriqlari bot**",
+        "",
+        "Quyidagi tugmalardan foydalanishingiz mumkin:",
+        "🏠 Bosh menyu - asosiy menyu",
+        "❓ Yordam - yordam olish",
+    ]
+    if is_teacher and not is_superadmin:
+        lines += [
+            "",
+            "👨‍🏫 **O'qituvchi buyruqlari:**",
+            "📝 Yangi topshiriq",
+            "📊 Ovozlar",
+            "📍 Keldim",
+            "🚪 Ketdim",
+            "📚 Kitob buyurtma qilish",
+            "📦 Mening buyurtmalarim",
+        ]
+    if is_librarian and not is_superadmin:
+        lines += [
+            "",
+            "📚 **Kutubxona buyruqlari:**",
+            "📚 Buyurtmalar ro'yxati",
+            "📊 Buyurtma statistikasi",
+        ]
+    lines += [
+        "",
+        "📊 Oddiy foydalanuvchilar so'rovnomalarda qatnashishi mumkin.",
+        "",
+        "ℹ️ Tugmalarni bosish yoki komandalarni yozish orqali botdan foydalaning.",
+    ]
+    keyboard = get_main_keyboard(is_superadmin, is_teacher, is_librarian)
+    await callback.message.answer("\n".join(lines), reply_markup=keyboard)
 
 
 @router.message(Command("help"))

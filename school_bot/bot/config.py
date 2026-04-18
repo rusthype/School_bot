@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     teacher_ids_raw: str = Field(default="", alias="TEACHER_IDS")
     admin_group_id: int | None = Field(default=None, alias="ADMIN_GROUP_ID")
 
+    # Mandatory channel users must subscribe to before using /start.
+    # Leave empty string to disable the subscription gate. Bot MUST be admin in this channel.
+    required_channel: str = Field(default="@alochi_offline", alias="REQUIRED_CHANNEL")
+
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
 
     log_max_size_mb: int = Field(default=10, alias="LOG_MAX_SIZE_MB")
