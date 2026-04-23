@@ -317,6 +317,16 @@ class Profile(Base):
     school_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_schools.id"), nullable=True, index=True)
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Link to Alochi panel's teachers_teacher.id (UUID stored as String(36)).
+    # Populated automatically during registration when Profile.phone matches
+    # teachers_teacher.phone (after normalization). Unique — one Alochi teacher
+    # cannot be linked to two bot profiles.
+    alochi_teacher_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

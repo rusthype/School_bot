@@ -40,7 +40,10 @@ from school_bot.bot.services.profile_service import (
     can_register_again,
     get_profile_by_user_id,
     update_teacher_profile,
+    try_link_to_alochi_teacher,
+    find_profile_by_phone,
 )
+from school_bot.bot.utils.phone_utils import normalize_phone
 from school_bot.bot.states.admin_states import TeacherSelfEditStates, AddTeacherStates
 from school_bot.bot.services.approval_service import notify_superadmins_new_registration
 from school_bot.bot.services.logger_service import get_logger
@@ -623,12 +626,36 @@ async def registration_phone_contact(
     message: Message,
     state: FSMContext,
     session: AsyncSession,
+    db_user,
 ) -> None:
     contact = message.contact
     if not contact or not contact.phone_number:
         await message.answer("❌ Telefon raqam topilmadi. Qayta yuboring.")
         return
-    await state.update_data(phone=contact.phone_number)
+
+    # Reject a phone already used by a DIFFERENT bot user. Re-registering
+    # with the same phone on the same account is allowed (e.g. user pressed
+    # restart), so we exclude the current user's own profile.
+    normalized = normalize_phone(contact.phone_number)
+    phone_to_check = normalized or contact.phone_number
+    existing = await find_profile_by_phone(
+        session,
+        phone_to_check,
+        exclude_bot_user_id=db_user.id,
+    )
+    if existing is not None:
+        await message.answer(
+            "❌ Bu telefon raqami boshqa foydalanuvchida ro'yxatda. "
+            "Administrator bilan bog'laning."
+        )
+        return
+
+    # Persist the canonical form when we have it, so downstream matching
+    # against teachers_teacher is deterministic. Fall back to the raw
+    # number if normalization failed (still save it; approval flow will
+    # surface the issue).
+    phone_to_save = normalized or contact.phone_number
+    await state.update_data(phone=phone_to_save)
     data = await state.get_data()
     first_name = data.get("first_name", "")
     last_name = data.get("last_name", "")
@@ -644,7 +671,7 @@ async def registration_phone_contact(
         "📋 **Ma'lumotlaringiz:**\n"
         f"👤 Ism: {first_name} {last_name}\n"
         f"🏫 Maktab: {school_name}\n"
-        f"📱 Telefon: {contact.phone_number}\n\n"
+        f"📱 Telefon: {phone_to_save}\n\n"
         "✅ Tasdiqlaysizmi?"
     )
     builder = InlineKeyboardBuilder()
@@ -695,11 +722,21 @@ async def registration_confirm(
         school_id=school_id,
         profile_type=reg_type,
     )
+    # Try to link this Profile to an existing Alochi panel teacher by phone.
+    # Returns the Alochi teacher's name on match, None otherwise. Errors
+    # inside are logged and swallowed — registration itself must not fail.
+    linked_teacher_name = await try_link_to_alochi_teacher(session, profile)
     await notify_superadmins_new_registration(session, callback.bot, profile)
 
     await state.clear()
-    await callback.message.edit_text(
-        "✅ Ro'yxatdan o'tish muvaffaqiyatli yakunlandi. Administrator tasdig'ini kuting.")
+    confirmation_lines = [
+        "✅ Ro'yxatdan o'tish muvaffaqiyatli yakunlandi. Administrator tasdig'ini kuting.",
+    ]
+    if linked_teacher_name:
+        confirmation_lines.append(
+            f"\n✅ Siz A'lochi tizimida {linked_teacher_name} sifatida ro'yxatdan o'tgansiz."
+        )
+    await callback.message.edit_text("\n".join(confirmation_lines))
     await callback.answer()
 
 
