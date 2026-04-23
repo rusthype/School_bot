@@ -112,25 +112,35 @@ async def publish_poll_vote(
     to surface to the user.
     """
     try:
-        # One round-trip: teacher -> Alochi teacher -> school, plus voter name.
-        # `task.teacher_id` is `bot_users.id`. The teacher's Profile carries
-        # `alochi_teacher_id`, which joins to `teachers_teacher.id`.
-        # The voter's Profile lives in the same `bot_profiles` table, looked
-        # up by `vote.user_id` (also a `bot_users.id`). Voter-profile join is
-        # LEFT so votes from users without a Profile still publish.
+        # One round-trip: teacher -> Alochi teacher -> school, plus voter name
+        # and (new) the voter's linked Alochi Student id. ``task.teacher_id``
+        # is ``bot_users.id``. The teacher's Profile carries
+        # ``alochi_teacher_id``, which joins to ``teachers_teacher.id``.
+        # The voter's Profile lives in the same ``bot_profiles`` table, looked
+        # up by ``vote.user_id`` (also a ``bot_users.id``). Voter-profile
+        # join is LEFT so votes from users without a Profile still publish.
+        # ``students_student`` is LEFT-joined on ``student_bot_user_id`` so
+        # the panel can render "Parent of <student>" when a match exists.
+        # ``to_regclass`` keeps the query safe on environments that do not
+        # yet have the column (pre-migration rollout window).
         result = await session.execute(
             text(
                 """
                 SELECT
                     t.school_id,
-                    t.name       AS teacher_name,
-                    p_voter.first_name AS voter_first_name,
-                    p_voter.last_name  AS voter_last_name
+                    t.name                AS teacher_name,
+                    p_voter.first_name    AS voter_first_name,
+                    p_voter.last_name     AS voter_last_name,
+                    s.id                  AS student_id,
+                    s.name                AS student_name
                 FROM bot_profiles p_teacher
                 JOIN teachers_teacher t
                     ON t.id::text = p_teacher.alochi_teacher_id
                 LEFT JOIN bot_profiles p_voter
                     ON p_voter.bot_user_id = :voter_id
+                LEFT JOIN students_student s
+                    ON s.student_bot_user_id = :voter_id
+                   AND s.is_deleted = false
                 WHERE p_teacher.bot_user_id = :teacher_bot_id
                 LIMIT 1
                 """
@@ -151,7 +161,14 @@ async def publish_poll_vote(
             )
             return
 
-        school_id, teacher_name, voter_first, voter_last = row
+        (
+            school_id,
+            teacher_name,
+            voter_first,
+            voter_last,
+            student_id,
+            student_name,
+        ) = row
 
         voter_name = " ".join(
             part for part in (voter_first, voter_last) if part
@@ -179,6 +196,12 @@ async def publish_poll_vote(
             "option_id": option_id,
             "option_text": option_text,
             "voted_at": voted_at.isoformat() if voted_at else None,
+            # New in the link_bot_users rollout: student_id is non-null when
+            # the Telegram voter (a parent) has been auto-linked to a Student
+            # row via ``Student.student_bot_user_id``. Alochi panel clients
+            # use this to open the student drawer directly from a toast.
+            "student_id": str(student_id) if student_id else None,
+            "student_name": student_name,
         }
 
         redis = await get_redis()

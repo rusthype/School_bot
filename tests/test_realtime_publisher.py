@@ -85,7 +85,9 @@ class PublishPollVoteTests(unittest.TestCase):
 
     def test_skip_when_school_id_is_null(self) -> None:
         """Row exists but school_id is NULL (teacher row orphaned)."""
-        session = _session_returning((None, "T. Aliyev", "Anna", "Karimova"))
+        session = _session_returning(
+            (None, "T. Aliyev", "Anna", "Karimova", None, None)
+        )
         vote = _make_vote()
         task = _make_task()
 
@@ -102,7 +104,9 @@ class PublishPollVoteTests(unittest.TestCase):
 
     def test_publishes_correct_payload(self) -> None:
         """Happy path: row exists, payload shape and rating are correct."""
-        session = _session_returning((7, "T. Aliyev", "Anna", "Karimova"))
+        session = _session_returning(
+            (7, "T. Aliyev", "Anna", "Karimova", None, None)
+        )
         # option_id=1 -> "Yaxshi" -> 3 stars (4 - 1).
         vote = _make_vote(option_id=1, user_id=1001)
         task = _make_task(task_id=42, teacher_id=9001, topic="Algebra")
@@ -132,10 +136,15 @@ class PublishPollVoteTests(unittest.TestCase):
         self.assertEqual(payload["option_id"], 1)
         self.assertEqual(payload["option_text"], "Yaxshi")
         self.assertIsNotNone(payload["voted_at"])
+        # student_id/name are NULL when the voter is not linked to a Student row.
+        self.assertIsNone(payload["student_id"])
+        self.assertIsNone(payload["student_name"])
 
     def test_voter_name_falls_back_when_profile_missing(self) -> None:
         """LEFT JOIN returned NULL names -> 'Noma'lum'."""
-        session = _session_returning((7, "T. Aliyev", None, None))
+        session = _session_returning(
+            (7, "T. Aliyev", None, None, None, None)
+        )
         vote = _make_vote(option_id=3)  # worst -> 1 star
         task = _make_task()
 
@@ -157,7 +166,9 @@ class PublishPollVoteTests(unittest.TestCase):
 
     def test_redis_failure_is_swallowed(self) -> None:
         """If redis.publish raises, we log and return — never propagate."""
-        session = _session_returning((7, "T. Aliyev", "Anna", "Karimova"))
+        session = _session_returning(
+            (7, "T. Aliyev", "Anna", "Karimova", None, None)
+        )
         vote = _make_vote()
         task = _make_task()
 
@@ -180,6 +191,102 @@ class PublishPollVoteTests(unittest.TestCase):
 
         # Must NOT raise.
         _run(publish_poll_vote(session, vote, task))
+
+    def test_student_id_included_when_voter_linked(self) -> None:
+        """Voter (bot_user.id) linked to students.student_bot_user_id ->
+        payload carries student_id and student_name."""
+        session = _session_returning(
+            (7, "T. Aliyev", "Anna", "Karimova", "11111111-1111-1111-1111-111111111111", "Bekzod A."),
+        )
+        vote = _make_vote(option_id=0, user_id=1001)
+        task = _make_task()
+
+        fake_redis = MagicMock()
+        fake_redis.publish = AsyncMock()
+
+        with patch(
+            "school_bot.bot.services.realtime_publisher.get_redis",
+            new=AsyncMock(return_value=fake_redis),
+        ):
+            _run(publish_poll_vote(session, vote, task))
+
+        fake_redis.publish.assert_awaited_once()
+        _, raw_payload = fake_redis.publish.await_args.args
+        payload = json.loads(raw_payload)
+        self.assertEqual(
+            payload["student_id"], "11111111-1111-1111-1111-111111111111"
+        )
+        self.assertEqual(payload["student_name"], "Bekzod A.")
+
+
+class PublishPollVoteIntegrationTests(unittest.TestCase):
+    """End-to-end check using a stand-in async Redis client.
+
+    Unlike the unit tests above, this exercise the full happy path — SQL
+    lookup -> payload build -> Redis.publish call — and verifies the final
+    payload contract the alochi_backend subscriber relies on. We don't run a
+    real Redis here (CI lacks one); instead a lightweight async mock stands
+    in for ``fakeredis.aioredis.FakeRedis`` which would otherwise be the
+    natural choice if the dependency were available.
+    """
+
+    def setUp(self) -> None:
+        realtime_publisher._redis = None
+
+    def test_full_payload_contract_on_real_vote(self) -> None:
+        # Simulates a row returned by the upgraded SQL (6 columns), with the
+        # voter matched to an Alochi student.
+        row = (
+            "9aaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",  # school_id (UUID string)
+            "O'qituvchi Aliyev",
+            "Ruhshona",
+            "Karimova",
+            "7bbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",  # student_id
+            "Bekzod A.",
+        )
+        session = _session_returning(row)
+        vote = _make_vote(option_id=0, user_id=55555)  # best -> 4 stars
+        task = _make_task(task_id=101, teacher_id=77777, topic="Hisob-kitob")
+
+        captured: list[tuple[str, bytes]] = []
+
+        class FakeAsyncRedis:
+            async def publish(self, channel, payload):
+                captured.append((channel, payload))
+
+        with patch(
+            "school_bot.bot.services.realtime_publisher.get_redis",
+            new=AsyncMock(return_value=FakeAsyncRedis()),
+        ):
+            _run(publish_poll_vote(session, vote, task))
+
+        self.assertEqual(len(captured), 1, "publish must be called exactly once")
+        channel, raw = captured[0]
+        self.assertEqual(channel, PUBSUB_CHANNEL)
+
+        payload = json.loads(raw)
+        # The alochi subscriber relies on this exact set of keys.
+        expected_keys = {
+            "school_id",
+            "task_id",
+            "teacher_bot_user_id",
+            "teacher_name",
+            "topic",
+            "voter_bot_user_id",
+            "voter_name",
+            "rating_stars",
+            "option_id",
+            "option_text",
+            "voted_at",
+            "student_id",
+            "student_name",
+        }
+        self.assertEqual(set(payload.keys()), expected_keys)
+        self.assertEqual(payload["school_id"], row[0])
+        self.assertEqual(payload["rating_stars"], 4)
+        self.assertEqual(payload["option_text"], "Juda yaxshi")
+        self.assertEqual(payload["student_id"], row[4])
+        self.assertEqual(payload["student_name"], "Bekzod A.")
 
 
 class PubsubRedisUrlTests(unittest.TestCase):
