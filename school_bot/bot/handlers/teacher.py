@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from school_bot.bot.services.poll_service import send_task_poll
 from school_bot.bot.services.group_service import list_groups, get_group_by_id, get_groups_by_names
 from school_bot.bot.services.task_service import create_task
+from school_bot.bot.services.realtime_publisher import publish_poll_vote
 from school_bot.bot.states.new_task import NewTaskStates
 from school_bot.database.models import Task, PollVote
 from school_bot.bot.handlers.common import get_main_keyboard, get_teacher_votes_keyboard
@@ -498,6 +499,15 @@ async def handle_poll_answer(poll_answer: PollAnswer, session: AsyncSession) -> 
 
         session.add_all(votes)
         await session.commit()
+
+        # Fire-and-forget real-time notification to the Alochi admin panel.
+        # Runs AFTER commit so the row is guaranteed durable; each vote is
+        # published independently because an answer may contain multiple
+        # option_ids (though the current poll is single-choice). Any Redis
+        # or SQL error inside publish_poll_vote is swallowed there — a
+        # failure here must never affect vote persistence.
+        for saved_vote in votes:
+            await publish_poll_vote(session, saved_vote, task)
     except Exception:
         logger.exception(
             "handle_poll_answer failed",
