@@ -4,12 +4,18 @@ Revision ID: 20260329_01
 Revises: 20260312_01
 Create Date: 2026-03-29
 
+Note: ``down_revision`` was previously set to ``None``, which produced
+two parallel heads in the alembic chain (``20260312_01`` was orphaned
+on one branch, ``20260329_01`` on the other). Anchoring this migration
+to ``20260312_01`` heals the chain so ``alembic upgrade head`` resolves
+to a single linear path. The docstring header already declared the
+correct parent — only the runtime constant was wrong.
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = "20260329_01"
-down_revision = None
+down_revision = "20260312_01"
 branch_labels = None
 depends_on = None
 
