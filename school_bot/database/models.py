@@ -455,6 +455,25 @@ class Group(Base):
         nullable=True,
         index=True,
     )
+    # Cross-link to Alochi panel ``groups_group.id`` (UUID). NULL until
+    # an operator backfills it via the ``link_bot_groups`` management
+    # command on the Alochi side, or by editing the row in Django admin.
+    # Mirrors the same pattern used for ``bot_schools.alochi_school_id``
+    # (alembic 20260501_03) — see that migration's docstring for the
+    # full rationale on cross-DB ID linking.
+    #
+    # Stored as String(36) on the SQLAlchemy side because the bot ORM
+    # doesn't depend on a Postgres UUID type; the underlying column is
+    # true UUID in the DB — the cast happens automatically when reading.
+    # Unique + partial index on ``alochi_group_id IS NOT NULL`` so two
+    # bot Telegram chats cannot point at the same panel pedagogical
+    # group (which would make panel→bot sync ambiguous).
+    alochi_group_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
