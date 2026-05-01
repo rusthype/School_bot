@@ -491,8 +491,15 @@ async def registration_begin(
     state: FSMContext,
 ) -> None:
     await state.set_state(RegistrationStates.first_name)
+    # The prompt explicitly says FAQAT ism ("only first name") because
+    # the previous wording "ismingizni kiriting" got interpreted as
+    # "give your full name" by enough users that we ended up with rows
+    # like first_name="Muyassarxon Hamraqulova". The validator now
+    # rejects multi-word input, but the prompt still needs to set
+    # expectations clearly so users don't hit the error first.
     await message.answer(
-        "👤 Iltimos, ismingizni kiriting:",
+        "\U0001f464 Iltimos, FAQAT ismingizni kiriting (familiyani keyingi "
+        "qadamda so'raymiz).\n\nMisol: Aziza, Akmal, Sa'dulla",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -506,15 +513,105 @@ async def registration_cancel_welcome(
     await message.answer("❌ Ro'yxatdan o'tish bekor qilindi.", reply_markup=ReplyKeyboardRemove())
 
 
-_NAME_PATTERN = re.compile(r"^[A-Za-zА-Яа-яЎўҚқҲҳЭэ\s'\-]+$")
+# Single-word name validation.
+#
+# We accept Latin (A–Z, a–z) and the full Cyrillic block (\u0400–\u04FF
+# covers Russian, Uzbek Cyrillic ў/қ/ғ/ҳ, plus Tajik etc.), an apostrophe,
+# and a hyphen for double-barrelled surnames. Crucially we DO NOT accept
+# whitespace — first_name and last_name are each captured separately, so
+# a user typing both into one field (which historically produced rows
+# like "Muyassarxon Hamraqulova Muyassarxon Hamraqulova") is now caught
+# at validation time and re-prompted.
+_NAME_PATTERN = re.compile(r"^[A-Za-z\u0400-\u04FF'\-]+$")
 _PHONE_PATTERN = re.compile(r"^\+?[0-9]{9,13}$")
+
+# Apostrophe variants found on real phone keyboards. iOS auto-corrects
+# the ASCII apostrophe to U+2019 (right single quotation mark); the
+# official Uzbek Latin orthography uses U+02BB (modifier letter turned
+# comma) for o\u02bb / g\u02bb. Android sometimes produces U+2018 or U+02BC. We
+# normalize all of these to ASCII U+0027 before validation so:
+#   (a) the regex above stays simple,
+#   (b) downstream comparisons against the panel (which stores ASCII)
+#       are deterministic, and
+#   (c) users can keep typing names like Qo\u2019chqorova / Qo\u02bbchqorova / Qo'chqorova
+#       and get the same canonical form.
+_APOSTROPHE_VARIANTS = (
+    "\u2019",  # right single quotation mark (iOS auto-correct)
+    "\u2018",  # left single quotation mark
+    "\u02bb",  # Uzbek modifier letter turned comma (official orthography)
+    "\u02bc",  # modifier letter apostrophe
+    "\u02b9",  # modifier letter prime
+    "\u00b4",  # acute accent (some Android keyboards)
+    "`",       # backtick
+)
+
+# Lowercase tokens that we treat as obvious placeholder garbage when
+# typed into a name field. New entries should be lowercase, ASCII, and
+# trimmed — _is_placeholder_name() handles the comparison.
+_PLACEHOLDER_NAME_TOKENS = frozenset({
+    "ism", "familya", "familiya", "name", "surname", "lastname",
+    "firstname", "test", "asd", "qwe", "qwerty", "abc", "xxx",
+    "none", "null", "undefined",
+})
+
+
+def _normalize_name(raw: str) -> str:
+    """Strip whitespace and convert apostrophe variants to ASCII U+0027.
+
+    Idempotent — calling it twice produces the same string. Always call
+    this BEFORE _validate_name so the regex sees a canonical form.
+    """
+    if not raw:
+        return ""
+    cleaned = raw.strip()
+    for variant in _APOSTROPHE_VARIANTS:
+        cleaned = cleaned.replace(variant, "'")
+    return cleaned
+
+
+def _is_placeholder_name(name: str) -> bool:
+    """True if the user typed something like "ism" or "test" as their name.
+
+    Catches users who type the literal prompt word back at us ("ism" was
+    a real registration we had to clean up) or obvious test garbage.
+    """
+    return name.lower() in _PLACEHOLDER_NAME_TOKENS
 
 
 def _validate_name(name: str) -> str | None:
+    """Return an error message string if invalid, else None.
+
+    Expects the input to already be normalized via _normalize_name —
+    i.e. trimmed and with apostrophes flattened to ASCII.
+    """
+    if not name:
+        return "Ism bo'sh bo'lmasligi kerak."
+    # Telegram command typed into the field, e.g. "/cancel" or "/start".
+    if name.startswith("/"):
+        return "Ism komanda (/) bilan boshlanmasligi kerak."
+    # @username pasted in.
+    if "@" in name:
+        return "Ism @ belgisini o'z ichiga olishi mumkin emas."
+    # Multi-word input — most common UX failure mode. Be explicit about
+    # which step expects which token so the user knows how to recover.
+    if any(ch.isspace() for ch in name):
+        return (
+            "Iltimos, BITTA so'z yozing.\n\n"
+            "\u2022 Birinchi qadamda \u2014 faqat ism (masalan: Aziza)\n"
+            "\u2022 Keyingi qadamda \u2014 faqat familiya (masalan: Yusupova)"
+        )
+    if _is_placeholder_name(name):
+        return (
+            "\"{0}\" haqiqiy ism emas. Iltimos, o'zingizning haqiqiy ismingizni "
+            "yozing.".format(name)
+        )
     if len(name) < 2 or len(name) > 50:
         return "Ism 2 dan 50 gacha belgi bo'lishi kerak."
     if not _NAME_PATTERN.match(name):
-        return "Ismda faqat harflar, probel, apostrof va tire ishlatish mumkin."
+        return (
+            "Ismda faqat harflar va apostrof (', o', g') ishlatish mumkin.\n"
+            "Misol: Aziza, Sa'dulla, Qo'chqor, G'ulom."
+        )
     return None
 
 
@@ -523,17 +620,17 @@ async def registration_first_name(
     message: Message,
     state: FSMContext,
 ) -> None:
-    first_name = (message.text or "").strip()
-    if not first_name:
-        await message.answer("❌ Ism bo'sh bo'lmasligi kerak. Qayta kiriting:")
-        return
+    first_name = _normalize_name(message.text or "")
     error = _validate_name(first_name)
     if error:
-        await message.answer(f"❌ {error} Qayta kiriting:")
+        await message.answer(f"\u274c {error}\n\nQayta kiriting:")
         return
     await state.update_data(first_name=first_name)
     await state.set_state(RegistrationStates.last_name)
-    await message.answer("👤 Iltimos, familiyangizni kiriting:")
+    await message.answer(
+        "\U0001f464 Iltimos, FAQAT familiyangizni kiriting.\n\n"
+        "Misol: Yusupova, Aliyev, Qo'chqorova, G'aniyev"
+    )
 
 
 @router.message(RegistrationStates.last_name, F.text)
@@ -542,12 +639,13 @@ async def registration_last_name(
     state: FSMContext,
     session: AsyncSession,
 ) -> None:
-    last_name = (message.text or "").strip()
-    if last_name:
-        error = _validate_name(last_name)
-        if error:
-            await message.answer(f"❌ {error} Qayta kiriting:")
-            return
+    last_name = _normalize_name(message.text or "")
+    # Last name is required (the prompt says so). Reject empty or invalid;
+    # _validate_name handles whitespace/placeholder/length/regex.
+    error = _validate_name(last_name)
+    if error:
+        await message.answer(f"\u274c {error}\n\nQayta kiriting:")
+        return
     await state.update_data(last_name=last_name)
     schools = await list_schools(session)
     if not schools:
@@ -1418,27 +1516,26 @@ async def add_student_cancel(
 
 @router.message(AddStudentStates.first_name, F.text)
 async def add_student_first_name(message: Message, state: FSMContext) -> None:
-    first_name = (message.text or "").strip()
-    if not first_name:
-        await message.answer("Ism bo'sh bo'lmasligi kerak. Qayta kiriting:")
-        return
+    first_name = _normalize_name(message.text or "")
     error = _validate_name(first_name)
     if error:
-        await message.answer(f"❌ {error} Qayta kiriting:")
+        await message.answer(f"\u274c {error}\n\nQayta kiriting:")
         return
     await state.update_data(student_first_name=first_name)
     await state.set_state(AddStudentStates.last_name)
-    await message.answer("👤 Familiyani kiriting:", reply_markup=get_cancel_keyboard())
+    await message.answer(
+        "\U0001f464 FAQAT o'quvchining familiyasini kiriting:",
+        reply_markup=get_cancel_keyboard(),
+    )
 
 
 @router.message(AddStudentStates.last_name, F.text)
 async def add_student_last_name(message: Message, state: FSMContext) -> None:
-    last_name = (message.text or "").strip()
-    if last_name:
-        error = _validate_name(last_name)
-        if error:
-            await message.answer(f"❌ {error} Qayta kiriting:")
-            return
+    last_name = _normalize_name(message.text or "")
+    error = _validate_name(last_name)
+    if error:
+        await message.answer(f"\u274c {error}\n\nQayta kiriting:")
+        return
     await state.update_data(student_last_name=last_name)
     await state.set_state(AddStudentStates.phone)
     await message.answer("📱 Telefon raqamini kiriting (+998...):", reply_markup=get_cancel_keyboard())
@@ -3129,7 +3226,12 @@ async def add_teacher_waiting_id(
 # ============== TEACHER SELF-EDIT ==============
 
 _SELF_PHONE_RE = re.compile(r"^\+998\d{9}$")
-_SELF_NAME_PATTERN = re.compile(r"^[A-Za-zА-Яа-яЎўҚқҲҳЭэ\s'\-]+$")
+# Reuses _NAME_PATTERN / _validate_name above so the self-edit path
+# enforces exactly the same single-word + apostrophe rules as the
+# initial registration. The old separate _SELF_NAME_PATTERN allowed
+# whitespace, which let teachers re-introduce "FirstName LastName" into
+# a single field via the edit menu \u2014 same bug class as the registration
+# duplicates this commit fixes.
 
 
 def _build_self_edit_field_keyboard() -> InlineKeyboardMarkup:
@@ -3241,12 +3343,10 @@ async def teacher_self_edit_first_name(
         await cancel_current_action(message, state, is_teacher=True)
         return
 
-    value = (message.text or "").strip()
-    if len(value) < 2 or len(value) > 50:
-        await message.answer("❌ Ism 2 dan 50 gacha belgi bo'lishi kerak. Qayta kiriting:\n\n/cancel — bekor qilish")
-        return
-    if not _SELF_NAME_PATTERN.match(value):
-        await message.answer("❌ Ismda faqat harflar, probel, apostrof va tire ishlatish mumkin. Qayta kiriting:\n\n/cancel — bekor qilish")
+    value = _normalize_name(message.text or "")
+    error = _validate_name(value)
+    if error:
+        await message.answer(f"\u274c {error}\n\n/cancel \u2014 bekor qilish")
         return
 
     profile = await update_teacher_profile(session, db_user.id, first_name=value)
@@ -3273,12 +3373,10 @@ async def teacher_self_edit_last_name(
         await cancel_current_action(message, state, is_teacher=True)
         return
 
-    value = (message.text or "").strip()
-    if len(value) < 2 or len(value) > 50:
-        await message.answer("❌ Familiya 2 dan 50 gacha belgi bo'lishi kerak. Qayta kiriting:\n\n/cancel — bekor qilish")
-        return
-    if not _SELF_NAME_PATTERN.match(value):
-        await message.answer("❌ Familiyada faqat harflar, probel, apostrof va tire ishlatish mumkin. Qayta kiriting:\n\n/cancel — bekor qilish")
+    value = _normalize_name(message.text or "")
+    error = _validate_name(value)
+    if error:
+        await message.answer(f"\u274c {error}\n\n/cancel \u2014 bekor qilish")
         return
 
     profile = await update_teacher_profile(session, db_user.id, last_name=value)
