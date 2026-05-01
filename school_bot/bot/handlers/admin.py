@@ -53,6 +53,10 @@ from school_bot.bot.services.approval_service import (
 from school_bot.bot.utils.parser import parse_telegram_input
 from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.services.pagination import SchoolPagination
+from school_bot.bot.services.alochi_sync import (
+    sync_teacher_to_alochi,
+    format_credentials_message,
+)
 from school_bot.bot.states.group_management import GroupManagementStates
 from school_bot.bot.states.admin_states import (
     AddTeacherManualStates,
@@ -850,8 +854,54 @@ async def approval_confirm(
     await clear_selections_for_profile(profile_id)
 
     user = await session.get(User, profile.bot_user_id)
+    full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
+
+    # ── Sync to Alochi panel ────────────────────────────────────────────────
+    # Best-effort: a failed panel sync MUST NOT block the bot's own
+    # approval flow. The teacher is already approved on the bot side
+    # (approve_profile committed above) and that's the source of
+    # truth for bot-side authorization. The panel sync provisions a
+    # matching Alochi Teacher row + login credentials so the teacher
+    # can also use the web panel — a nice-to-have, not a hard
+    # dependency. Errors are caught inside sync_teacher_to_alochi.
+    sync_result = None
+    if user:
+        from school_bot.bot.services.alochi_sync import (
+            sync_teacher_to_alochi,
+            format_credentials_message,
+        )
+        # A'lochi convention is "Last First" — the surname comes
+        # first. We pass the joined name and let the panel split.
+        # Note: profile.school_id is the BOT-side school id (BIGINT),
+        # NOT the Alochi UUID. We deliberately leave school_id=None
+        # here so the operator assigns the Alochi school via the
+        # panel UI later — matches what the legacy --create-missing
+        # backfill does for existing rows.
+        sync_name = f"{profile.last_name or ''} {profile.first_name or ''}".strip()
+        sync_result = await sync_teacher_to_alochi(
+            bot_user_id=user.id,
+            name=sync_name or full_name or "O'qituvchi",
+            phone=profile.phone or '',
+            school_id=None,
+            subjects=[],
+        )
+        # Mirror the alochi_teacher_id back onto the bot Profile so
+        # other bot code paths (e.g. profile_service.try_link_to_alochi_teacher)
+        # know the link is already in place.
+        if sync_result and not profile.alochi_teacher_id:
+            profile.alochi_teacher_id = sync_result.teacher_id
+            try:
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                logger.exception(
+                    "Failed to persist alochi_teacher_id after sync — non-fatal",
+                    extra={"bot_user_id": user.id, "teacher_id": sync_result.teacher_id},
+                )
+
     if user:
         assigned_str = ", ".join(assigned_names)
+        # Step 1: confirmation + group assignment notice
         await callback.bot.send_message(
             chat_id=user.telegram_id,
             text=(
@@ -860,6 +910,24 @@ async def approval_confirm(
                 f"👥 Guruhlar: {assigned_str}"
             ),
         )
+
+        # Step 2: panel login credentials (when sync succeeded)
+        if sync_result is not None:
+            try:
+                await callback.bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=format_credentials_message(sync_result, full_name),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to DM panel credentials — non-fatal",
+                    extra={
+                        "telegram_id": user.telegram_id,
+                        "teacher_id": sync_result.teacher_id,
+                    },
+                )
+
         keyboard = get_main_keyboard(is_superadmin=False, is_teacher=True)
         await callback.bot.send_message(
             chat_id=user.telegram_id,
@@ -869,12 +937,26 @@ async def approval_confirm(
         logger.info(
             f"Admin {db_user.id} o'qituvchini tasdiqladi: {user.telegram_id} (guruhlar: {assigned_str})",
             extra={"user_id": db_user.telegram_id if hasattr(db_user, "telegram_id") else db_user.id,
-                   "chat_id": callback.message.chat.id, "command": "approve"},
+                   "chat_id": callback.message.chat.id, "command": "approve",
+                   "alochi_synced": sync_result is not None},
         )
 
-    full_name = f"{profile.first_name} {profile.last_name or ''}".strip()
+    # Show admin a slightly richer status line including panel sync result
+    sync_line = ""
+    if sync_result is not None:
+        sync_line = (
+            f"\n🎯 A'lochi panel: {sync_result.username}"
+            if sync_result.created
+            else f"\n🔗 A'lochi panel: linked ({sync_result.username})"
+        )
+    elif user is not None:
+        sync_line = "\n⚠️ A'lochi panel sync: o'tkazilmadi (logni tekshiring)"
+
     await callback.message.edit_text(
-        f"✅ Tasdiqlandi: {full_name}\nMaktab: {school_name}\nGuruhlar: {', '.join(assigned_names)}"
+        f"✅ Tasdiqlandi: {full_name}\n"
+        f"Maktab: {school_name}\n"
+        f"Guruhlar: {', '.join(assigned_names)}"
+        f"{sync_line}"
     )
     await state.clear()
     await callback.answer()

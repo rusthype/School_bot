@@ -29,6 +29,20 @@ class Settings(BaseSettings):
     log_max_size_mb: int = Field(default=10, alias="LOG_MAX_SIZE_MB")
     log_cleanup_days: int = Field(default=30, alias="LOG_CLEANUP_DAYS")
 
+    # Alochi panel sync — used by ``services.alochi_sync`` when a
+    # teacher is approved. Empty values disable the sync (the bot
+    # logs a warning and continues without panel-side provisioning).
+    alochi_sync_url: str = Field(
+        default="",
+        alias="ALOCHI_SYNC_URL",
+        description="Base URL for the Alochi internal bot endpoints, e.g. https://api.alochi.org/api/v1/internal/bot",
+    )
+    alochi_sync_token: str = Field(
+        default="",
+        alias="ALOCHI_SYNC_TOKEN",
+        description="Shared secret matching settings.BOT_SYNC_TOKEN on the panel side.",
+    )
+
     @property
     def superadmin_ids(self) -> List[int]:
         raw = (self.superadmin_ids_raw or "").strip()
