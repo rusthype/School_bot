@@ -8,6 +8,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, FSInputFile, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, PollAnswer
+from aiogram import Bot
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func
@@ -17,6 +18,7 @@ from school_bot.bot.services.poll_service import send_task_poll
 from school_bot.bot.services.group_service import list_groups, get_group_by_id, get_groups_by_names
 from school_bot.bot.services.task_service import create_task
 from school_bot.bot.services.realtime_publisher import publish_poll_vote
+from school_bot.bot.services.teacher_notifier import notify_teacher_of_vote
 from school_bot.bot.states.new_task import NewTaskStates
 from school_bot.database.models import Task, PollVote
 from school_bot.bot.handlers.common import get_main_keyboard, get_teacher_votes_keyboard
@@ -444,7 +446,11 @@ async def invalid_notes(message: Message) -> None:
 
 
 @router.poll_answer()
-async def handle_poll_answer(poll_answer: PollAnswer, session: AsyncSession) -> None:
+async def handle_poll_answer(
+    poll_answer: PollAnswer,
+    session: AsyncSession,
+    bot: Bot,
+) -> None:
     try:
         poll_id = poll_answer.poll_id
         if not poll_id:
@@ -508,6 +514,16 @@ async def handle_poll_answer(poll_answer: PollAnswer, session: AsyncSession) -> 
         # failure here must never affect vote persistence.
         for saved_vote in votes:
             await publish_poll_vote(session, saved_vote, task)
+
+        # Refresh the teacher's private results card. Each new vote
+        # deletes the previous card and sends a fresh one so the
+        # latest results bubble back to the top of the teacher's chat.
+        # Called once per poll_answer event (not per option_id) because
+        # all options share the same Task and we render them together.
+        # Errors are caught inside notify_teacher_of_vote — vote save
+        # is the source of truth and must never be blocked by a
+        # Telegram failure.
+        await notify_teacher_of_vote(bot, session, task)
     except Exception:
         logger.exception(
             "handle_poll_answer failed",

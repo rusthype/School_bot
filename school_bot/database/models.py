@@ -78,6 +78,17 @@ class Task(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     poll_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     poll_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    # Telegram message id of the LIVE results card the bot DMs to the
+    # teacher. Pattern: each new vote DELETES the previous card and SENDS
+    # a fresh one (the user wants the message to bubble up to the top of
+    # the chat as the conversation grows). Storing the id lets us delete
+    # the prior message before sending the new one. NULL until the first
+    # vote arrives, then non-NULL for the lifetime of the task.
+    teacher_notif_message_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
