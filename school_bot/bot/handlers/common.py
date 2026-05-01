@@ -490,16 +490,16 @@ async def registration_begin(
     message: Message,
     state: FSMContext,
 ) -> None:
+    # We capture FAMILIYA + ISM in a SINGLE step. Splitting it into two
+    # prompts caused users to type their full name into BOTH fields,
+    # producing "Muyassarxon Hamraqulova Muyassarxon Hamraqulova"
+    # rows. One field, one prompt, much harder to misuse — and matches
+    # what users see on official Uzbek documents (familya first).
     await state.set_state(RegistrationStates.first_name)
-    # The prompt explicitly says FAQAT ism ("only first name") because
-    # the previous wording "ismingizni kiriting" got interpreted as
-    # "give your full name" by enough users that we ended up with rows
-    # like first_name="Muyassarxon Hamraqulova". The validator now
-    # rejects multi-word input, but the prompt still needs to set
-    # expectations clearly so users don't hit the error first.
     await message.answer(
-        "\U0001f464 Iltimos, FAQAT ismingizni kiriting (familiyani keyingi "
-        "qadamda so'raymiz).\n\nMisol: Aziza, Akmal, Sa'dulla",
+        "\U0001f464 Iltimos, FAMILIYA va ISMingizni kiriting.\n\n"
+        "Format: Familiya Ism\n"
+        "Misol: Yusupova Shoira",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -581,6 +581,11 @@ def _is_placeholder_name(name: str) -> bool:
 def _validate_name(name: str) -> str | None:
     """Return an error message string if invalid, else None.
 
+    Single-token validation — used by the SELF-EDIT flow, where the
+    user explicitly chose to edit just the first_name OR just the
+    last_name. For the combined registration prompt see _parse_full_name
+    below.
+
     Expects the input to already be normalized via _normalize_name —
     i.e. trimmed and with apostrophes flattened to ASCII.
     """
@@ -592,61 +597,153 @@ def _validate_name(name: str) -> str | None:
     # @username pasted in.
     if "@" in name:
         return "Ism @ belgisini o'z ichiga olishi mumkin emas."
-    # Multi-word input — most common UX failure mode. Be explicit about
-    # which step expects which token so the user knows how to recover.
+    # Self-edit is one field at a time — reject multi-word input here
+    # because the user opted to edit just "Ism" or just "Familiya".
     if any(ch.isspace() for ch in name):
         return (
-            "Iltimos, BITTA so'z yozing.\n\n"
-            "\u2022 Birinchi qadamda \u2014 faqat ism (masalan: Aziza)\n"
-            "\u2022 Keyingi qadamda \u2014 faqat familiya (masalan: Yusupova)"
+            "Iltimos, BITTA so'z yozing (Tahrirlash menyusida ism va "
+            "familiya alohida tahrirlanadi)."
         )
     if _is_placeholder_name(name):
         return (
-            "\"{0}\" haqiqiy ism emas. Iltimos, o'zingizning haqiqiy ismingizni "
-            "yozing.".format(name)
+            "\"{0}\" haqiqiy ism emas. Iltimos, o'zingizning haqiqiy "
+            "ismingizni yozing.".format(name)
         )
     if len(name) < 2 or len(name) > 50:
         return "Ism 2 dan 50 gacha belgi bo'lishi kerak."
     if not _NAME_PATTERN.match(name):
         return (
-            "Ismda faqat harflar va apostrof (', o', g') ishlatish mumkin.\n"
-            "Misol: Aziza, Sa'dulla, Qo'chqor, G'ulom."
+            "Ismda faqat harflar va apostrof (', o', g') ishlatish "
+            "mumkin.\nMisol: Aziza, Sa'dulla, Qo'chqor, G'ulom."
         )
     return None
 
 
+def _parse_full_name(raw: str) -> tuple[str, str] | str:
+    """Parse "Familiya Ism" input into (last_name, first_name).
+
+    The Uzbek convention puts the last name FIRST. Tokens after the
+    first are joined back into first_name so patronymics like
+    "Akmal qizi" / "Solojon o'g'li" round-trip verbatim:
+
+      "Yusupova Shoira"             -> ("Yusupova", "Shoira")
+      "Qo'chqorova Muhabbatxon"     -> ("Qo'chqorova", "Muhabbatxon")
+      "Yusupova Shoira Akmal qizi"  -> ("Yusupova", "Shoira Akmal qizi")
+
+    Returns either a (last_name, first_name) tuple on success, or an
+    error string on failure. Caller may pass raw input — we normalize
+    apostrophes inside.
+    """
+    cleaned = _normalize_name(raw or "")
+    if not cleaned:
+        return "Bo'sh bo'lmasligi kerak."
+    if cleaned.startswith("/"):
+        return "Komanda (/) bilan boshlanmasligi kerak."
+    if "@" in cleaned:
+        return "@ belgisini o'z ichiga olishi mumkin emas."
+
+    tokens = cleaned.split()
+    if len(tokens) < 2:
+        return (
+            "Iltimos, ham FAMILIYAni ham ISMingizni kiriting.\n\n"
+            "Format: Familiya Ism\n"
+            "Misol: Yusupova Shoira"
+        )
+    # Cap at 4 tokens to allow Uzbek patronymics ("Akmal qizi",
+    # "Solojon o'g'li"). Beyond that it's almost certainly someone
+    # pasting a full sentence and we want to bounce it back.
+    if len(tokens) > 4:
+        return (
+            "Juda ko'p so'z. Iltimos, faqat familiya va ismingizni "
+            "kiriting.\n\n"
+            "Format: Familiya Ism\n"
+            "Misol: Yusupova Shoira"
+        )
+
+    # Per-token validation. We catch placeholder words at the token
+    # level so "ism familya" is rejected even in the new combined
+    # format, and the regex is per-token so spaces are only allowed
+    # BETWEEN tokens (not within them).
+    for token in tokens:
+        if _is_placeholder_name(token):
+            return (
+                "\"{0}\" haqiqiy ism emas. Iltimos, haqiqiy familiya va "
+                "ismingizni yozing.".format(token)
+            )
+        if len(token) < 2 or len(token) > 50:
+            return "Har bir so'z 2 dan 50 gacha belgi bo'lishi kerak."
+        if not _NAME_PATTERN.match(token):
+            return (
+                "Faqat harflar va apostrof (', o', g') ishlatish "
+                "mumkin.\n\n"
+                "Misol: Yusupova Shoira, Qo'chqorova Muhabbatxon, "
+                "G'aniyev Akmal"
+            )
+
+    last_name = tokens[0]
+    first_name = " ".join(tokens[1:])
+    return last_name, first_name
+
+
 @router.message(RegistrationStates.first_name, F.text)
-async def registration_first_name(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    first_name = _normalize_name(message.text or "")
-    error = _validate_name(first_name)
-    if error:
-        await message.answer(f"\u274c {error}\n\nQayta kiriting:")
-        return
-    await state.update_data(first_name=first_name)
-    await state.set_state(RegistrationStates.last_name)
-    await message.answer(
-        "\U0001f464 Iltimos, FAQAT familiyangizni kiriting.\n\n"
-        "Misol: Yusupova, Aliyev, Qo'chqorova, G'aniyev"
-    )
-
-
-@router.message(RegistrationStates.last_name, F.text)
-async def registration_last_name(
+async def registration_full_name(
     message: Message,
     state: FSMContext,
     session: AsyncSession,
 ) -> None:
-    last_name = _normalize_name(message.text or "")
-    # Last name is required (the prompt says so). Reject empty or invalid;
-    # _validate_name handles whitespace/placeholder/length/regex.
-    error = _validate_name(last_name)
-    if error:
-        await message.answer(f"\u274c {error}\n\nQayta kiriting:")
+    """Combined Familiya+Ism prompt — stores both and advances to school.
+
+    The handler is wired to RegistrationStates.first_name (the same
+    state the legacy two-step flow used) so existing in-flight FSM
+    sessions land here cleanly after deploy. The legacy `last_name`
+    state is no longer reachable from registration_begin, but the
+    handler below stays as a defensive fallback for anyone who was
+    mid-flow when the bot restarted.
+    """
+    parsed = _parse_full_name(message.text or "")
+    if isinstance(parsed, str):
+        await message.answer(f"\u274c {parsed}\n\nQayta kiriting:")
         return
-    await state.update_data(last_name=last_name)
+    last_name, first_name = parsed
+    await state.update_data(first_name=first_name, last_name=last_name)
+
+    # Advance straight to school selection — no more last_name step.
+    schools = await list_schools(session)
+    if not schools:
+        await message.answer(
+            "\u274c Maktablar ro'yxati bo'sh. Administrator bilan bog'laning."
+        )
+        await state.clear()
+        return
+    await state.set_state(RegistrationStates.school)
+    total_pages = max(1, (len(schools) + 9) // 10)
+    keyboard = build_registration_school_keyboard(schools, page=1)
+    await message.answer(
+        f"\U0001f3eb Maktabingizni tanlang (1/{total_pages} sahifa):",
+        reply_markup=keyboard,
+    )
+
+
+@router.message(RegistrationStates.last_name, F.text)
+async def registration_last_name_legacy(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    """Legacy fallback for users mid-flow when this commit deployed.
+
+    The new flow never enters last_name state, but a user who pressed
+    "\u2705 Ro'yxatdan o'tish" + sent their first name on the OLD code
+    might still have FSM state = last_name. Treat anything they type
+    here as a re-start of the combined prompt: forget the partial
+    first_name, parse the new input as "Familiya Ism".
+    """
+    parsed = _parse_full_name(message.text or "")
+    if isinstance(parsed, str):
+        await message.answer(f"\u274c {parsed}\n\nQayta kiriting:")
+        return
+    last_name, first_name = parsed
+    await state.update_data(first_name=first_name, last_name=last_name)
     schools = await list_schools(session)
     if not schools:
         await message.answer("❌ Maktablar ro'yxati bo'sh. Administrator bilan bog'laning.")
@@ -767,7 +864,8 @@ async def registration_phone_contact(
 
     text = (
         "📋 **Ma'lumotlaringiz:**\n"
-        f"👤 Ism: {first_name} {last_name}\n"
+        f"👤 Familiya: {last_name}\n"
+        f"👤 Ism: {first_name}\n"
         f"🏫 Maktab: {school_name}\n"
         f"📱 Telefon: {phone_to_save}\n\n"
         "✅ Tasdiqlaysizmi?"
@@ -1493,8 +1591,11 @@ async def teacher_add_student(
     if not (is_teacher or is_superadmin):
         return
     await state.set_state(AddStudentStates.first_name)
+    # Combined Familiya+Ism in one shot, same UX as registration.
     await message.answer(
-        "👤 O'quvchining ismini kiriting:",
+        "\U0001f464 O'quvchining FAMILIYA va ISMini kiriting.\n\n"
+        "Format: Familiya Ism\n"
+        "Misol: Yusupova Shoira",
         reply_markup=get_cancel_keyboard(),
     )
 
@@ -1515,30 +1616,47 @@ async def add_student_cancel(
 
 
 @router.message(AddStudentStates.first_name, F.text)
-async def add_student_first_name(message: Message, state: FSMContext) -> None:
-    first_name = _normalize_name(message.text or "")
-    error = _validate_name(first_name)
-    if error:
-        await message.answer(f"\u274c {error}\n\nQayta kiriting:")
+async def add_student_full_name(message: Message, state: FSMContext) -> None:
+    """Combined Familiya+Ism for o'quvchi-add flow. Skips last_name state."""
+    parsed = _parse_full_name(message.text or "")
+    if isinstance(parsed, str):
+        await message.answer(f"\u274c {parsed}\n\nQayta kiriting:")
         return
-    await state.update_data(student_first_name=first_name)
-    await state.set_state(AddStudentStates.last_name)
+    last_name, first_name = parsed
+    await state.update_data(
+        student_first_name=first_name,
+        student_last_name=last_name,
+    )
+    # Skip the old AddStudentStates.last_name step — jump straight to phone.
+    await state.set_state(AddStudentStates.phone)
     await message.answer(
-        "\U0001f464 FAQAT o'quvchining familiyasini kiriting:",
+        "\U0001f4f1 Telefon raqamini kiriting (+998...):",
         reply_markup=get_cancel_keyboard(),
     )
 
 
 @router.message(AddStudentStates.last_name, F.text)
-async def add_student_last_name(message: Message, state: FSMContext) -> None:
-    last_name = _normalize_name(message.text or "")
-    error = _validate_name(last_name)
-    if error:
-        await message.answer(f"\u274c {error}\n\nQayta kiriting:")
+async def add_student_last_name_legacy(message: Message, state: FSMContext) -> None:
+    """Legacy fallback for users mid-flow when this commit deployed.
+
+    Same recovery story as registration_last_name_legacy — if someone
+    was on the old two-step flow when the bot restarted, treat their
+    next message as a fresh "Familiya Ism" input and continue.
+    """
+    parsed = _parse_full_name(message.text or "")
+    if isinstance(parsed, str):
+        await message.answer(f"\u274c {parsed}\n\nQayta kiriting:")
         return
-    await state.update_data(student_last_name=last_name)
+    last_name, first_name = parsed
+    await state.update_data(
+        student_first_name=first_name,
+        student_last_name=last_name,
+    )
     await state.set_state(AddStudentStates.phone)
-    await message.answer("📱 Telefon raqamini kiriting (+998...):", reply_markup=get_cancel_keyboard())
+    await message.answer(
+        "\U0001f4f1 Telefon raqamini kiriting (+998...):",
+        reply_markup=get_cancel_keyboard(),
+    )
 
 
 @router.message(AddStudentStates.phone, F.text)
