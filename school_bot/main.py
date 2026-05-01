@@ -39,6 +39,7 @@ from school_bot.bot.services.school_service import seed_schools
 from school_bot.bot.services.book_service import seed_book_categories
 from school_bot.bot.services.order_escalation_service import start_overdue_order_watch
 from school_bot.bot.services.log_cleanup_service import LogCleanupService
+from school_bot.bot.services.teacher_notifier import schedule_pending_digests
 
 
 
@@ -124,6 +125,15 @@ async def main() -> None:
         asyncio.create_task(set_bot_commands(bot, settings.superadmin_ids))
         asyncio.create_task(start_overdue_order_watch(bot=bot, session_factory=session_factory))
         asyncio.create_task(start_log_cleanup_watch(settings))
+        # Recover any 24h teacher digests that were scheduled before
+        # the previous shutdown. Reads bot_tasks rows where
+        # notify_scheduled_at is set AND teacher_notif_message_id is
+        # still NULL, then re-schedules an asyncio sleep for the
+        # remaining time (or fires immediately if the deadline has
+        # already passed). Safe to call alongside fresh scheduling —
+        # the per-task fire path is idempotent on
+        # teacher_notif_message_id.
+        asyncio.create_task(schedule_pending_digests(bot, session_factory))
 
     dp.startup.register(on_startup)
 

@@ -84,8 +84,28 @@ class Task(Base):
     # the chat as the conversation grows). Storing the id lets us delete
     # the prior message before sending the new one. NULL until the first
     # vote arrives, then non-NULL for the lifetime of the task.
+    #
+    # As of the 24h-digest refactor (migration 20260501_02), this column
+    # also doubles as the "digest already delivered" marker: NULL means
+    # pending, non-NULL means the digest has been sent and the scheduler
+    # MUST NOT fire again on bot restart. The two uses don't conflict
+    # because the digest is the only path that writes this column — the
+    # legacy per-vote refresh has been removed from handle_poll_answer.
     teacher_notif_message_id: Mapped[int | None] = mapped_column(
         BigInteger,
+        nullable=True,
+        index=True,
+    )
+    # Wall-clock time at which the bot should send the 24h digest to
+    # the teacher's private chat. Set in send_task_poll to now() + 24h
+    # (or whatever TEACHER_NOTIFY_DELAY_HOURS is configured to). NULL
+    # for tasks created before the digest feature shipped — those rows
+    # never fire and that's the desired behaviour. The startup recovery
+    # path in main.start_pending_notifications scans rows where this
+    # column is NOT NULL AND teacher_notif_message_id IS NULL to find
+    # work that survived a bot restart.
+    notify_scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
         nullable=True,
         index=True,
     )

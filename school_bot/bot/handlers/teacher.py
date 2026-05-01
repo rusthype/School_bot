@@ -2,7 +2,7 @@ from __future__ import annotations
 import html
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, StateFilter
@@ -18,7 +18,10 @@ from school_bot.bot.services.poll_service import send_task_poll
 from school_bot.bot.services.group_service import list_groups, get_group_by_id, get_groups_by_names
 from school_bot.bot.services.task_service import create_task
 from school_bot.bot.services.realtime_publisher import publish_poll_vote
-from school_bot.bot.services.teacher_notifier import notify_teacher_of_vote
+from school_bot.bot.services.teacher_notifier import (
+    TEACHER_NOTIFY_DELAY_SECONDS,
+    schedule_teacher_digest,
+)
 from school_bot.bot.states.new_task import NewTaskStates
 from school_bot.database.models import Task, PollVote
 from school_bot.bot.handlers.common import get_main_keyboard, get_teacher_votes_keyboard
@@ -261,6 +264,7 @@ async def process_photo(
         state: FSMContext,
         bot,
         session: AsyncSession,
+        session_factory,
         db_user,
         is_superadmin: bool = False,
 ) -> None:
@@ -275,7 +279,7 @@ async def process_photo(
     await state.update_data(photo_path=file_name)
 
     # Rasm bilan yakunlash
-    await finish_task_with_photo(message, state, session, db_user, is_superadmin)
+    await finish_task_with_photo(message, state, session, session_factory, db_user, is_superadmin)
 
 
 @router.message(NewTaskStates.photo, Command("skip"))
@@ -283,10 +287,11 @@ async def skip_photo(
         message: Message,
         state: FSMContext,
         session: AsyncSession,
+        session_factory,
         db_user,
         is_superadmin: bool = False,
 ) -> None:
-    await finish_task_without_photo(message, state, session, db_user, is_superadmin)
+    await finish_task_without_photo(message, state, session, session_factory, db_user, is_superadmin)
 
 
 @router.message(NewTaskStates.photo, F.text == "⏭️ O'tkazib yuborish")
@@ -294,10 +299,11 @@ async def skip_photo_button(
         message: Message,
         state: FSMContext,
         session: AsyncSession,
+        session_factory,
         db_user,
         is_superadmin: bool = False,
 ) -> None:
-    await finish_task_without_photo(message, state, session, db_user, is_superadmin)
+    await finish_task_without_photo(message, state, session, session_factory, db_user, is_superadmin)
 
 
 @router.message(NewTaskStates.photo)
@@ -314,6 +320,7 @@ async def finish_task_with_photo(
         message: Message,
         state: FSMContext,
         session: AsyncSession,
+        session_factory,
         db_user,
         is_superadmin: bool = False
 ) -> None:
@@ -353,6 +360,22 @@ async def finish_task_with_photo(
         poll_id=poll_message.poll.id if poll_message.poll else None,
     )
 
+    # Schedule the 24h teacher digest. We mark the wall-clock deadline
+    # on the task row first (so a bot restart can recover the timer)
+    # then spawn the asyncio task that will actually fire it. Order
+    # matters: writing notify_scheduled_at BEFORE scheduling means a
+    # crash between the two leaves the recovery scan with a row to
+    # pick up; the reverse order would leak a fire-once asyncio task
+    # whose deadline is never persisted.
+    notify_at = datetime.now(timezone.utc) + timedelta(seconds=TEACHER_NOTIFY_DELAY_SECONDS)
+    task.notify_scheduled_at = notify_at
+    await session.commit()
+    schedule_teacher_digest(
+        bot=message.bot,
+        session_factory=session_factory,
+        task_id=task.id,
+    )
+
     logger.info(
         f"Topshiriq yaratildi: ID={task.id}, Teacher={db_user.telegram_id}, Topic={topic}, Group={group_name}",
         extra={"user_id": message.from_user.id, "chat_id": message.chat.id, "command": "new_task"},
@@ -375,6 +398,7 @@ async def finish_task_without_photo(
         message: Message,
         state: FSMContext,
         session: AsyncSession,
+        session_factory,
         db_user,
         is_superadmin: bool = False
 ) -> None:
@@ -403,6 +427,16 @@ async def finish_task_without_photo(
         description=description,
         poll_message_id=poll_message.message_id,
         poll_id=poll_message.poll.id if poll_message.poll else None,
+    )
+
+    # Schedule the 24h teacher digest — same pattern as the photo path.
+    notify_at = datetime.now(timezone.utc) + timedelta(seconds=TEACHER_NOTIFY_DELAY_SECONDS)
+    task.notify_scheduled_at = notify_at
+    await session.commit()
+    schedule_teacher_digest(
+        bot=message.bot,
+        session_factory=session_factory,
+        task_id=task.id,
     )
 
     logger.info(
@@ -515,15 +549,12 @@ async def handle_poll_answer(
         for saved_vote in votes:
             await publish_poll_vote(session, saved_vote, task)
 
-        # Refresh the teacher's private results card. Each new vote
-        # deletes the previous card and sends a fresh one so the
-        # latest results bubble back to the top of the teacher's chat.
-        # Called once per poll_answer event (not per option_id) because
-        # all options share the same Task and we render them together.
-        # Errors are caught inside notify_teacher_of_vote — vote save
-        # is the source of truth and must never be blocked by a
-        # Telegram failure.
-        await notify_teacher_of_vote(bot, session, task)
+        # NOTE: Per-vote teacher chat notification was removed in the
+        # 24h-digest refactor (migration 20260501_02). Vote persistence
+        # is the only side effect on the hot path now; the consolidated
+        # digest is fired by an asyncio task scheduled in send_task_poll
+        # at poll-creation time. The teacher can still inspect live vote
+        # counts on demand via /poll_voters.
     except Exception:
         logger.exception(
             "handle_poll_answer failed",
