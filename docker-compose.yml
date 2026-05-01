@@ -17,6 +17,24 @@ services:
       redis:
         condition: service_started
     volumes:
+      # Source code mount (read-only). Lets a deployer pick up code
+      # changes by `git pull && docker compose restart bot` instead of
+      # rebuilding the image every time. The image still ships its own
+      # copy via `COPY . .` in the Dockerfile, so a fresh container
+      # without the host directory still works — the mount just
+      # overrides whatever the image baked in. ``:ro`` is intentional:
+      # the bot has no business writing to its own source tree, and
+      # marking it read-only blocks accidental in-container edits.
+      #
+      # Caveats:
+      #   * requirements.txt changes still need a real rebuild
+      #     (mount can't add Python packages).
+      #   * Dockerfile / .dockerignore changes also need a rebuild.
+      #   * Restart is required after a pull because aiogram caches
+      #     route handlers at startup; SIGHUP wouldn't pick them up.
+      - ./school_bot:/app/school_bot:ro
+      - ./alembic:/app/alembic:ro
+      - ./alembic.ini:/app/alembic.ini:ro
       - ./logs:/app/logs
       - ./photos:/app/photos
       - ./covers:/app/covers
