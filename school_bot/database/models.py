@@ -380,6 +380,24 @@ class School(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     radius_m: Mapped[int] = mapped_column(Integer, default=150, server_default="150")
+    # Cross-link to Alochi panel ``users_school.id``. NULL until an
+    # operator backfills it (see the ``link_bot_schools`` management
+    # command on the Alochi side, or Django admin for one-offs). When
+    # populated, the bot's approval_confirm handler reads this column
+    # to translate the bot's BIGINT school_id to the Alochi UUID before
+    # POSTing to the panel-sync internal endpoint.
+    #
+    # Stored as a 36-char string (UUID with dashes) on the SQLAlchemy
+    # side because the bot ORM doesn't depend on a Postgres UUID type;
+    # the underlying column is true UUID in the DB — the cast happens
+    # automatically when reading. Unique on the panel UUID so two bot
+    # schools cannot point at the same Alochi row.
+    alochi_school_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

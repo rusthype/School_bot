@@ -146,6 +146,12 @@ async def revoke_teacher(session: AsyncSession, user_id: int) -> bool:
     """Soft-delete a teacher: sets is_active=False and revokes their role/approval.
 
     The user row is kept in the DB and can be restored by an admin.
+
+    After committing the bot-side change, fires a best-effort POST to the
+    Alochi panel's revoke endpoint so the panel ``Teacher`` row is
+    soft-deleted in lockstep. The HTTP call is non-blocking on failure —
+    a network error or panel-side problem MUST NOT undo the bot revoke,
+    which is the source of truth here.
     """
     profile = await get_profile_by_user_id(session, user_id)
     user = await session.get(User, user_id)
@@ -173,6 +179,21 @@ async def revoke_teacher(session: AsyncSession, user_id: int) -> bool:
 
     if changed:
         await session.commit()
+
+        # Best-effort: tell the Alochi panel to mirror this revoke. We
+        # do this AFTER commit so the bot side is durable even if the
+        # HTTP call fails. Local import keeps profile_service import-
+        # cheap when the alochi sync feature is not configured — the
+        # function itself short-circuits when env vars are unset.
+        try:
+            from school_bot.bot.services.alochi_sync import revoke_teacher_in_alochi
+            await revoke_teacher_in_alochi(bot_user_id=user_id)
+        except Exception:
+            logger.warning(
+                "alochi_sync.revoke_teacher_in_alochi raised — bot revoke is durable",
+                exc_info=True,
+                extra={"bot_user_id": user_id},
+            )
 
     return changed
 

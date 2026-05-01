@@ -872,17 +872,22 @@ async def approval_confirm(
         )
         # A'lochi convention is "Last First" — the surname comes
         # first. We pass the joined name and let the panel split.
-        # Note: profile.school_id is the BOT-side school id (BIGINT),
-        # NOT the Alochi UUID. We deliberately leave school_id=None
-        # here so the operator assigns the Alochi school via the
-        # panel UI later — matches what the legacy --create-missing
-        # backfill does for existing rows.
         sync_name = f"{profile.last_name or ''} {profile.first_name or ''}".strip()
+
+        # Resolve the bot's BIGINT school_id to the Alochi UUID. The
+        # `school` object was already fetched above; after migration
+        # 20260501_03 it carries an `alochi_school_id` column that
+        # operators populate via the Django admin or the
+        # `link_bot_schools` management command. NULL when the bot
+        # school has not yet been linked to an Alochi panel school.
+        alochi_school_uuid = None
+        if school is not None and getattr(school, 'alochi_school_id', None):
+            alochi_school_uuid = str(school.alochi_school_id)
         sync_result = await sync_teacher_to_alochi(
             bot_user_id=user.id,
             name=sync_name or full_name or "O'qituvchi",
             phone=profile.phone or '',
-            school_id=None,
+            school_id=alochi_school_uuid,
             subjects=[],
         )
         # Mirror the alochi_teacher_id back onto the bot Profile so

@@ -197,3 +197,74 @@ def format_credentials_message(result: AlochiSyncResult, full_name: str) -> str:
         f"⚠️ <i>Parolingizni xavfsiz joyga saqlang va birinchi "
         f"kirishdan keyin o'zgartiring.</i>"
     )
+
+
+async def revoke_teacher_in_alochi(
+    *,
+    bot_user_id: int,
+    timeout_seconds: float = 10.0,
+) -> bool:
+    """POST to the panel's /revoke-teacher/ endpoint to soft-delete the Alochi Teacher.
+
+    Returns True when the panel confirmed a revocation (``revoked: true``),
+    False on any failure path: not configured, network error, no Alochi
+    match, already revoked, or unexpected response. The bot caller treats
+    this as best-effort — the bot's own profile state is the source of
+    truth and gets revoked locally before this function is called.
+    """
+    settings = Settings()
+    base_url = (settings.alochi_sync_url or '').rstrip('/')
+    token = settings.alochi_sync_token or ''
+
+    if not base_url or not token:
+        logger.info(
+            'alochi_revoke.disabled — ALOCHI_SYNC_URL or ALOCHI_SYNC_TOKEN '
+            'not configured; skipping panel revoke',
+            extra={'bot_user_id': bot_user_id},
+        )
+        return False
+
+    url = f'{base_url}/revoke-teacher/'
+    headers = {
+        'X-Bot-Sync-Token': token,
+        'Content-Type': 'application/json',
+    }
+    payload = {'bot_user_id': bot_user_id}
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    text = await resp.text()
+                    logger.error(
+                        'alochi_revoke.http_error status=%s body=%s',
+                        resp.status,
+                        text[:300],
+                        extra={'bot_user_id': bot_user_id, 'url': url},
+                    )
+                    return False
+                data = await resp.json()
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        logger.error(
+            'alochi_revoke.network_error %s',
+            exc,
+            extra={'bot_user_id': bot_user_id, 'url': url},
+        )
+        return False
+    except Exception:
+        logger.exception(
+            'alochi_revoke.unexpected_error',
+            extra={'bot_user_id': bot_user_id, 'url': url},
+        )
+        return False
+
+    revoked = bool(data.get('revoked', False))
+    logger.info(
+        'alochi_revoke.ok teacher_id=%s revoked=%s reason=%s',
+        data.get('teacher_id'),
+        revoked,
+        data.get('reason', ''),
+        extra={'bot_user_id': bot_user_id},
+    )
+    return revoked
