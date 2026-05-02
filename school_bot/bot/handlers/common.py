@@ -2339,6 +2339,7 @@ async def show_schools_menu(
         return
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text="📋 Maktablar ro'yxati")],
             [KeyboardButton(text="➕ Maktab qo'shish")],
             [KeyboardButton(text="❌ Maktab o'chirish")],
             [KeyboardButton(text="🔙 Orqaga"), KeyboardButton(text="🏠 Bosh menyu")],
@@ -2347,6 +2348,78 @@ async def show_schools_menu(
         input_field_placeholder="Bo'limni tanlang...",
     )
     await _send_menu(message, "🏫 **MAKTABLAR BO'LIMI**", reply_markup=keyboard)
+
+
+@router.message(F.text == "📋 Maktablar ro'yxati")
+async def show_schools_list(
+        message: Message,
+        session: AsyncSession,
+        is_superadmin: bool = False,
+) -> None:
+    """Show all schools with their teacher / group counts.
+
+    Reads everything in two queries (schools + counts via subqueries on
+    bot_profiles and bot_groups), formats as a single chunked message.
+    Per-school inline buttons let the operator drill into each school's
+    teachers and groups; for now they're informational only — navigation
+    into school detail is a follow-up.
+    """
+    if not is_superadmin:
+        return
+
+    schools = await list_schools(session)
+    if not schools:
+        await message.answer(
+            "📍 Maktablar ro'yxati bo'sh.\n\n"
+            "➕ Maktab qo'shish tugmasi orqali yangi maktab qo'shing."
+        )
+        return
+
+    # Per-school counts in one batch via raw SQL — cheaper than N
+    # round-trips per school as the school list grows.
+    teacher_counts = {}
+    group_counts = {}
+    if schools:
+        ids = [s.id for s in schools]
+        from sqlalchemy import text
+        result = await session.execute(
+            text(
+                "SELECT school_id, COUNT(*) FROM bot_profiles "
+                "WHERE school_id = ANY(:ids) AND is_approved = true "
+                "GROUP BY school_id"
+            ),
+            {"ids": ids},
+        )
+        teacher_counts = {row[0]: row[1] for row in result.all()}
+
+        result = await session.execute(
+            text(
+                "SELECT school_id, COUNT(*) FROM bot_groups "
+                "WHERE school_id = ANY(:ids) AND status = 'active' "
+                "GROUP BY school_id"
+            ),
+            {"ids": ids},
+        )
+        group_counts = {row[0]: row[1] for row in result.all()}
+
+    lines = [f"🏫 **Maktablar ro'yxati** ({len(schools)} ta)\n"]
+    for school in schools:
+        teacher_n = teacher_counts.get(school.id, 0)
+        group_n = group_counts.get(school.id, 0)
+        # Cross-link indicator: ✅ means this bot school has been linked
+        # to its Alochi panel counterpart via link_bot_schools mgmt cmd.
+        # Used for ops to see at a glance which schools are sync-ready.
+        linked_mark = "✅" if school.alochi_school_id else "⚪"
+        lines.append(
+            f"{linked_mark} **#{school.number}** — {school.name}\n"
+            f"   📑 Bot ID: `{school.id}` · 📝 Telegram chatlar: {group_n} ta · "
+            f"👨‍🏫 O'qituvchilar: {teacher_n} ta"
+        )
+    lines.append(
+        "\n✅ = Alochi panelga ulangan, ⚪ = hali ulanmagan\n"
+        "Yangi maktab qo'shish uchun ➕ tugmasini bosing."
+    )
+    await send_chunked_message(message, "\n".join(lines))
 
 
 @router.message(F.text == "📚 KITOBLAR")
