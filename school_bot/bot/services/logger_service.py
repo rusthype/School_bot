@@ -180,5 +180,28 @@ def setup_logging(app_name: str = "school_bot") -> logging.Logger:
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Get a logger instance"""
+    """Get a logger instance.
+
+    Calls setup_logging() the first time it's invoked, so the parent
+    'school_bot' logger always has the file handlers attached before
+    any child logger tries to propagate up. Without this auto-init the
+    /logs panel saw empty files because no record ever reached disk —
+    the parent had no handlers, child loggers propagated to it, and
+    the records were silently dropped.
+
+    setup_logging() is itself idempotent (early-returns if handlers
+    already exist), so multiple calls from different importers are
+    cheap.
+    """
+    if not _root_initialized():
+        setup_logging()
     return logging.getLogger(name)
+
+
+def _root_initialized() -> bool:
+    """True if the 'school_bot' logger already has its file handlers.
+
+    Used by get_logger() to decide whether to call setup_logging().
+    Checking by name avoids re-running setup for unrelated loggers.
+    """
+    return bool(logging.getLogger("school_bot").handlers)

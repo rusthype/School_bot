@@ -20,16 +20,37 @@ logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LOG_DIR = PROJECT_ROOT / "logs"
+
+# Primary log file names — these MUST match what logger_service.py actually
+# writes. Mismatch is the bug we previously had: LOG_FILES used "bot.log"
+# / "error.log" but logger_service.setup_logging() writes
+# "school_bot.log" / "school_bot.error.log" (LOG_DIR / f"{app_name}.log"
+# where app_name="school_bot"). The panel showed "Log fayli bo'sh" for
+# every superadmin click because:
+#
+#   1. _ensure_log_files() created an EMPTY bot.log on import,
+#   2. _resolve_log_path() found bot.log (size=0) and fell through to
+#      ALT_LOG_FILES,
+#   3. school_bot.log might not exist yet on a fresh deploy,
+#   4. final return = empty bot.log,
+#   5. _read_last_lines() bails with "📬 Log fayli bo'sh".
+#
+# The fix: put the real logger filenames FIRST, demote the legacy
+# bot.log / error.log paths to the ALT fallback chain. _resolve_log_path
+# will now look at the file logger_service is actually writing to, find
+# real content there, and return it.
 LOG_FILES = {
-    "main": LOG_DIR / "bot.log",
-    "error": LOG_DIR / "error.log",
+    "main": LOG_DIR / "school_bot.log",
+    "error": LOG_DIR / "school_bot.error.log",
     "backup": LOG_DIR / "backup.log",
     "access": LOG_DIR / "access.log",
     "stats": LOG_DIR / "stats.log",
 }
+# Legacy fallback names — kept so older deploys (or future code that
+# decides to write here) still surface in the panel.
 ALT_LOG_FILES = {
-    "main": LOG_DIR / "school_bot.log",
-    "error": LOG_DIR / "school_bot.error.log",
+    "main": LOG_DIR / "bot.log",
+    "error": LOG_DIR / "error.log",
     "backup": LOG_DIR / "backup.log",
     "access": LOG_DIR / "access.log",
     "stats": LOG_DIR / "stats.log",
@@ -41,10 +62,16 @@ _rate_limit: dict[int, deque[float]] = {}
 
 
 def _ensure_log_files() -> None:
+    """Make sure the log directory exists. Do NOT pre-create empty files.
+
+    Pre-creating empty files used to be the cause of the "Log fayli
+    bo'sh" bug — _resolve_log_path saw an existing zero-byte file in
+    LOG_FILES and never fell through to the file logger_service.py was
+    actually writing to. Now we just guarantee the directory; the
+    individual log files are created on-demand by the rotating file
+    handlers in logger_service.py the first time anything gets logged.
+    """
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    for name, log_file in LOG_FILES.items():
-        if not log_file.exists():
-            log_file.write_text("", encoding="utf-8")
 
 
 def _seed_sample_logs() -> None:
