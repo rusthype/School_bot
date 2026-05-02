@@ -2356,13 +2356,18 @@ async def show_schools_list(
         session: AsyncSession,
         is_superadmin: bool = False,
 ) -> None:
-    """Show all schools with their teacher / group counts.
+    """Show all schools with their teacher / group counts and panel name.
 
-    Reads everything in two queries (schools + counts via subqueries on
-    bot_profiles and bot_groups), formats as a single chunked message.
-    Per-school inline buttons let the operator drill into each school's
-    teachers and groups; for now they're informational only — navigation
-    into school detail is a follow-up.
+    For each bot school we batch-fetch:
+      • approved-teacher count from bot_profiles,
+      • active Telegram-chat count from bot_groups,
+      • the canonical Alochi panel name from the (Django-managed)
+        ``schools`` table when the cross-link is set.
+
+    Both ORMs share one Postgres database, so the Alochi name can be
+    pulled in a single JOIN against ``schools`` keyed on the
+    ``bot_schools.alochi_school_id`` UUID. We don't import any Django
+    models — raw SQL keeps the bot side ORM-free.
     """
     if not is_superadmin:
         return
@@ -2375,32 +2380,48 @@ async def show_schools_list(
         )
         return
 
-    # Per-school counts in one batch via raw SQL — cheaper than N
-    # round-trips per school as the school list grows.
-    teacher_counts = {}
-    group_counts = {}
-    if schools:
-        ids = [s.id for s in schools]
-        from sqlalchemy import text
-        result = await session.execute(
-            text(
-                "SELECT school_id, COUNT(*) FROM bot_profiles "
-                "WHERE school_id = ANY(:ids) AND is_approved = true "
-                "GROUP BY school_id"
-            ),
-            {"ids": ids},
-        )
-        teacher_counts = {row[0]: row[1] for row in result.all()}
+    # Per-school counts + panel-side names in batched raw SQL — cheaper
+    # than N round-trips per school as the list grows.
+    from sqlalchemy import text
+    ids = [s.id for s in schools]
 
+    result = await session.execute(
+        text(
+            "SELECT school_id, COUNT(*) FROM bot_profiles "
+            "WHERE school_id = ANY(:ids) AND is_approved = true "
+            "GROUP BY school_id"
+        ),
+        {"ids": ids},
+    )
+    teacher_counts = {row[0]: row[1] for row in result.all()}
+
+    result = await session.execute(
+        text(
+            "SELECT school_id, COUNT(*) FROM bot_groups "
+            "WHERE school_id = ANY(:ids) AND status = 'active' "
+            "GROUP BY school_id"
+        ),
+        {"ids": ids},
+    )
+    group_counts = {row[0]: row[1] for row in result.all()}
+
+    # Pull the canonical Alochi names for every school whose cross-link
+    # is set. We key by alochi_school_id (UUID) on the JOIN; the result
+    # map is keyed by string for clean lookup against the bot row's UUID
+    # column (which SQLAlchemy returns as a string-ish).
+    alochi_uuids = [
+        str(s.alochi_school_id) for s in schools if s.alochi_school_id
+    ]
+    panel_names: dict[str, str] = {}
+    if alochi_uuids:
         result = await session.execute(
             text(
-                "SELECT school_id, COUNT(*) FROM bot_groups "
-                "WHERE school_id = ANY(:ids) AND status = 'active' "
-                "GROUP BY school_id"
+                "SELECT id::text, name FROM schools "
+                "WHERE id = ANY(:uuids::uuid[])"
             ),
-            {"ids": ids},
+            {"uuids": alochi_uuids},
         )
-        group_counts = {row[0]: row[1] for row in result.all()}
+        panel_names = {row[0]: row[1] for row in result.all()}
 
     lines = [f"🏫 **Maktablar ro'yxati** ({len(schools)} ta)\n"]
     for school in schools:
@@ -2408,15 +2429,24 @@ async def show_schools_list(
         group_n = group_counts.get(school.id, 0)
         # Cross-link indicator: ✅ means this bot school has been linked
         # to its Alochi panel counterpart via link_bot_schools mgmt cmd.
-        # Used for ops to see at a glance which schools are sync-ready.
         linked_mark = "✅" if school.alochi_school_id else "⚪"
+        panel_name = panel_names.get(str(school.alochi_school_id)) if school.alochi_school_id else None
+
         lines.append(
-            f"{linked_mark} **#{school.number}** — {school.name}\n"
+            f"{linked_mark} **#{school.number}** — {school.name}"
+        )
+        if panel_name:
+            # Show the canonical Alochi name on its own line so it's
+            # obvious this is the panel-side rasmiy nom, not a duplicate.
+            lines.append(f"   🔗 Alochi: _{panel_name}_")
+        lines.append(
             f"   📑 Bot ID: `{school.id}` · 📝 Telegram chatlar: {group_n} ta · "
             f"👨‍🏫 O'qituvchilar: {teacher_n} ta"
         )
+        lines.append("")  # blank line between schools for readability
+
     lines.append(
-        "\n✅ = Alochi panelga ulangan, ⚪ = hali ulanmagan\n"
+        "✅ = Alochi panelga ulangan, ⚪ = hali ulanmagan\n"
         "Yangi maktab qo'shish uchun ➕ tugmasini bosing."
     )
     await send_chunked_message(message, "\n".join(lines))
