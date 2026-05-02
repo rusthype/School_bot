@@ -3445,9 +3445,31 @@ async def teacher_self_edit_cancel(
 async def teacher_self_edit_cmd_cancel(
     message: Message,
     state: FSMContext,
+    db_user=None,
     is_teacher: bool = False,
+    is_superadmin: bool = False,
+    is_librarian: bool = False,
 ) -> None:
-    await cancel_current_action(message, state, is_teacher=is_teacher)
+    """Generic /cancel — catches any /cancel that wasn't handled by a
+    state-filtered receiver above (admin states, support, broadcasts,
+    book ordering, etc.).
+
+    Critical: pass ALL role flags through to ``cancel_current_action``.
+    Earlier this handler only forwarded ``is_teacher``, which meant a
+    superadmin who pressed /cancel from a no-state screen (e.g. the logs
+    panel) was rebuilt with the default 3-button keyboard — the full
+    superadmin menu disappeared. Forwarding ``db_user`` too lets
+    ``cancel_current_action`` recover the role from the DB even if the
+    middleware-injected role flags somehow got dropped.
+    """
+    await cancel_current_action(
+        message,
+        state,
+        db_user=db_user,
+        is_superadmin=is_superadmin,
+        is_teacher=is_teacher,
+        is_librarian=is_librarian,
+    )
 
 
 @router.message(TeacherSelfEditStates.waiting_first_name, F.text)
