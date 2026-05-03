@@ -25,6 +25,10 @@ from school_bot.bot.services.book_order_service import (
     get_status_text,
 )
 from school_bot.bot.services.book_service import get_book_by_id
+from school_bot.bot.services.order_notifications import (
+    notify_teacher_status_change,
+    notify_teacher_delivery_date_set,
+)
 from school_bot.bot.handlers.common import get_main_keyboard
 from school_bot.database.models import BookOrder, BookOrderItem, User, UserRole
 from school_bot.bot.services.logger_service import get_logger
@@ -36,6 +40,10 @@ logger = get_logger(__name__)
 
 class DeliveryDateStates(StatesGroup):
     waiting_date = State()
+
+
+class RejectOrderStates(StatesGroup):
+    waiting_for_reason = State()
 
 
 def _can_access(is_superadmin: bool, is_librarian: bool) -> bool:
@@ -51,26 +59,8 @@ def _priority_icon(priority: str | None) -> str:
     return mapping.get(priority or "normal", "🟢")
 
 
-async def _notify_teacher_status_change(
-    bot,
-    teacher_id: int,
-    order_id: uuid.UUID,
-    old_status: str,
-    new_status: str,
-    comment: str | None = None,
-) -> None:
-    try:
-        text = (
-            "🔄 <b>Buyurtma statusi o'zgartirildi</b>\n\n"
-            f"🆔 Buyurtma #{order_id}\n"
-            f"Eski status: {get_status_text(old_status) if old_status else '—'}\n"
-            f"Yangi status: {get_status_text(new_status)}\n"
-        )
-        if comment:
-            text += f"\n💬 Izoh: {comment}"
-        await bot.send_message(chat_id=teacher_id, text=text, parse_mode="HTML")
-    except Exception:
-        logger.error("Teacherga status xabari yuborilmadi", exc_info=True)
+# notify_teacher_status_change and notify_teacher_delivery_date_set are
+# imported from school_bot.bot.services.order_notifications
 
 
 async def _build_order_lines(session: AsyncSession, order_id: uuid.UUID) -> list[str]:
@@ -243,24 +233,23 @@ async def processing_order_callback(
         await callback.answer("❌ Buyurtma jarayonga o'tkazib bo'lmaydi.", show_alert=True)
         return
 
-    old_status = order.status
-    await mark_processing(session, order, db_user.id)
+    result = await mark_processing(session, order, db_user.id)
 
-    teacher = await session.get(User, order.teacher_id)
+    teacher = await session.get(User, result.order.teacher_id)
     if teacher:
-        await _notify_teacher_status_change(
+        await notify_teacher_status_change(
             callback.bot,
             teacher.telegram_id,
-            order.id,
-            old_status,
-            "processing",
-            comment="Jarayonga o'tkazildi",
+            result.order.id,
+            result.old_status,
+            result.new_status,
+            result.comment,
         )
 
     await callback.message.edit_text(
         f"🔄 Buyurtma jarayonga o'tkazildi.\n"
-        f"🆔 Buyurtma ID: {order.id}\n"
-        f"📊 Holat: {get_status_text(order.status)}"
+        f"🆔 Buyurtma ID: {result.order.id}\n"
+        f"📊 Holat: {get_status_text(result.order.status)}"
     )
     await callback.answer()
 
@@ -298,9 +287,18 @@ async def set_delivery_date_submit(
         await state.clear()
         return
 
-    await set_delivery_date(session, order, delivery, db_user.id)
+    updated_order = await set_delivery_date(session, order, delivery, db_user.id)
     await state.clear()
     await message.answer(f"✅ Yetkazish sanasi belgilandi: {delivery.strftime('%d.%m.%Y')}")
+
+    teacher = await session.get(User, updated_order.teacher_id)
+    if teacher and updated_order.delivery_date:
+        await notify_teacher_delivery_date_set(
+            message.bot,
+            teacher.telegram_id,
+            updated_order.id,
+            updated_order.delivery_date,
+        )
 
 
 @router.callback_query(lambda c: c.data.startswith("order_confirm:"))
@@ -330,23 +328,18 @@ async def confirm_order_callback(
         await callback.answer("Avval yetkazish sanasini kiriting.", show_alert=True)
         return
 
-    await confirm_order(session, order, db_user.id)
+    result = await confirm_order(session, order, db_user.id)
 
-    # Teacherga xabar
-    teacher = await session.get(User, order.teacher_id)
+    teacher = await session.get(User, result.order.teacher_id)
     if teacher:
-        items = await _build_order_lines(session, order.id)
-        delivery_str = order.delivery_date.strftime("%d.%m.%Y") if order.delivery_date else "Noma'lum"
-        text = (
-            "✅ Kitob buyurtmangiz tasdiqlandi!\n"
-            f"📦 Yetkazish sanasi: {delivery_str}\n"
-            "📚 Buyurtma:\n"
-            + "\n".join(items)
+        await notify_teacher_status_change(
+            callback.bot,
+            teacher.telegram_id,
+            result.order.id,
+            result.old_status,
+            result.new_status,
+            result.comment,
         )
-        try:
-            await callback.bot.send_message(chat_id=teacher.telegram_id, text=text)
-        except Exception:
-            logger.error("Teacherga xabar yuborilmadi", exc_info=True)
 
     await callback.message.answer("✅ Buyurtma tasdiqlandi.")
     await callback.answer()
@@ -355,11 +348,11 @@ async def confirm_order_callback(
 @router.callback_query(lambda c: c.data.startswith("order_reject:"))
 async def reject_order_callback(
     callback: CallbackQuery,
-    session: AsyncSession,
-    db_user,
+    state: FSMContext,
     is_superadmin: bool = False,
     is_librarian: bool = False,
 ) -> None:
+    """Step 1 of 2: prompt the librarian for a rejection reason."""
     if not _can_access(is_superadmin, is_librarian):
         await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
         return
@@ -370,35 +363,69 @@ async def reject_order_callback(
         await callback.answer("❌ Noto'g'ri so'rov.", show_alert=True)
         return
 
-    order = await get_book_order_by_id(session, order_id)
-    if not order:
-        await callback.answer("❌ Buyurtma topilmadi.", show_alert=True)
-        return
-
-    await reject_order(session, order, db_user.id)
-
-    teacher = await session.get(User, order.teacher_id)
-    if teacher:
-        items = await _build_order_lines(session, order.id)
-        try:
-            await callback.bot.send_message(
-                chat_id=teacher.telegram_id,
-                text=(
-                    "❌ Kitob buyurtmangiz rad etildi.\n"
-                    "📚 Buyurtma:\n"
-                    + "\n".join(items)
-                    + "\n\nBatafsil ma'lumot uchun kutubxona bilan bog'laning."
-                ),
-            )
-        except Exception:
-            logger.error("Teacherga rad etish xabari yuborilmadi", exc_info=True)
-
-    await callback.message.edit_text(
-        f"❌ Buyurtma rad etildi.\n"
-        f"🆔 Buyurtma ID: {order.id}\n"
-        f"📊 Holat: {get_status_text(order.status)}"
+    await state.set_state(RejectOrderStates.waiting_for_reason)
+    await state.update_data(reject_order_id=order_id)
+    await callback.message.answer(
+        "❓ Rad etish sababi (matn yuboring yoki /skip):\n"
+        "/cancel — rad etishni bekor qilish"
     )
     await callback.answer()
+
+
+@router.message(RejectOrderStates.waiting_for_reason, F.text)
+async def reject_order_reason(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    db_user,
+    is_superadmin: bool = False,
+    is_librarian: bool = False,
+) -> None:
+    """Step 2 of 2: receive reason text (or /skip / /cancel) and finalize rejection."""
+    if not _can_access(is_superadmin, is_librarian):
+        await message.answer("⛔ Ruxsat yo'q.")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+
+    if text == "/cancel":
+        await state.clear()
+        await message.answer("ℹ️ Rad etish bekor qilindi.")
+        return
+
+    data = await state.get_data()
+    order_id = data.get("reject_order_id")
+    if not order_id:
+        await message.answer("❌ So'rov muddati tugadi.")
+        await state.clear()
+        return
+
+    order = await get_book_order_by_id(session, int(order_id))
+    if not order:
+        await message.answer("❌ Buyurtma topilmadi.")
+        await state.clear()
+        return
+
+    comment: str | None = None if text == "/skip" else text
+    result = await reject_order(session, order, db_user.id, comment=comment)
+    await state.clear()
+
+    confirm_text = f"✅ Buyurtma #{result.order.id} rad etildi"
+    if comment:
+        confirm_text += f"\n💬 Sabab: {comment}"
+    await message.answer(confirm_text)
+
+    teacher = await session.get(User, result.order.teacher_id)
+    if teacher:
+        await notify_teacher_status_change(
+            message.bot,
+            teacher.telegram_id,
+            result.order.id,
+            result.old_status,
+            result.new_status,
+            result.comment,
+        )
 
 
 @router.callback_query(lambda c: c.data.startswith("order_deliver:"))
@@ -428,37 +455,31 @@ async def deliver_order_callback(
         await callback.answer("❌ Buyurtma avval tasdiqlanishi kerak.", show_alert=True)
         return
 
-    await mark_delivered(session, order, db_user.id)
+    result = await mark_delivered(session, order, db_user.id)
 
-    items = await _build_order_lines(session, order.id)
-    delivered_at = order.delivered_at.strftime("%d.%m.%Y %H:%M") if order.delivered_at else "Noma'lum"
+    items = await _build_order_lines(session, result.order.id)
+    delivered_at = result.order.delivered_at.strftime("%d.%m.%Y %H:%M") if result.order.delivered_at else "Noma'lum"
     deliverer = db_user.full_name or db_user.telegram_id
 
     await callback.message.edit_text(
         "📫 **BUYURTMA YETKAZILDI**\n\n"
-        f"🆔 Buyurtma ID: {order.id}\n"
+        f"🆔 Buyurtma ID: {result.order.id}\n"
         "📖 Kitoblar:\n"
         + "\n".join(items)
         + f"\n\n📅 Yetkazilgan sana: {delivered_at}\n"
         f"✅ Yetkazib bergan: {deliverer}"
     )
 
-    teacher = await session.get(User, order.teacher_id)
+    teacher = await session.get(User, result.order.teacher_id)
     if teacher:
-        try:
-            await callback.bot.send_message(
-                chat_id=teacher.telegram_id,
-                text=(
-                    "📫 **Kitob buyurtmangiz yetkazildi!**\n\n"
-                    f"🆔 Buyurtma ID: {order.id}\n"
-                    "📖 Kitoblar:\n"
-                    + "\n".join(items)
-                    + f"\n\n📅 Yetkazilgan sana: {delivered_at}\n"
-                    f"✅ Yetkazib bergan: {deliverer}"
-                ),
-            )
-        except Exception:
-            logger.error("Teacherga yetkazildi xabari yuborilmadi", exc_info=True)
+        await notify_teacher_status_change(
+            callback.bot,
+            teacher.telegram_id,
+            result.order.id,
+            result.old_status,
+            result.new_status,
+            result.comment,
+        )
 
     await callback.answer("✅ Buyurtma yetkazilgan deb belgilandi.")
 
@@ -514,8 +535,17 @@ async def cmd_set_delivery(
             await message.answer("❌ Buyurtma topilmadi.")
             return
 
-        await set_delivery_date(session, order, delivery, db_user.id)
+        updated_order = await set_delivery_date(session, order, delivery, db_user.id)
         await message.answer(f"✅ Yetkazish sanasi belgilandi: {delivery.strftime('%d.%m.%Y')}")
+
+        teacher = await session.get(User, updated_order.teacher_id)
+        if teacher and updated_order.delivery_date:
+            await notify_teacher_delivery_date_set(
+                message.bot,
+                teacher.telegram_id,
+                updated_order.id,
+                updated_order.delivery_date,
+            )
         return
 
 
@@ -550,21 +580,17 @@ async def cmd_confirm_order(
         await message.answer("Avval yetkazish sanasini kiriting: /set_delivery [order_id]")
         return
 
-    await confirm_order(session, order, db_user.id)
-    teacher = await session.get(User, order.teacher_id)
+    result = await confirm_order(session, order, db_user.id)
+    teacher = await session.get(User, result.order.teacher_id)
     if teacher:
-        items = await _build_order_lines(session, order.id)
-        delivery_str = order.delivery_date.strftime("%d.%m.%Y") if order.delivery_date else "Noma'lum"
-        text = (
-            "✅ Kitob buyurtmangiz tasdiqlandi!\n"
-            f"📦 Yetkazish sanasi: {delivery_str}\n"
-            "📚 Buyurtma:\n"
-            + "\n".join(items)
+        await notify_teacher_status_change(
+            message.bot,
+            teacher.telegram_id,
+            result.order.id,
+            result.old_status,
+            result.new_status,
+            result.comment,
         )
-        try:
-            await message.bot.send_message(chat_id=teacher.telegram_id, text=text)
-        except Exception:
-            logger.error("Teacherga tasdiq xabari yuborilmadi", exc_info=True)
 
     await message.answer("✅ Buyurtma tasdiqlandi.")
 
@@ -628,8 +654,19 @@ async def cmd_mark_done(
         await message.answer("❌ Buyurtma avval tasdiqlanishi kerak.")
         return
 
-    await mark_delivered(session, order, db_user.id)
-    await message.answer(f"✅ Buyurtma yetkazildi: {order.id}")
+    result = await mark_delivered(session, order, db_user.id)
+    await message.answer(f"✅ Buyurtma yetkazildi: {result.order.id}")
+
+    teacher = await session.get(User, result.order.teacher_id)
+    if teacher:
+        await notify_teacher_status_change(
+            message.bot,
+            teacher.telegram_id,
+            result.order.id,
+            result.old_status,
+            result.new_status,
+            result.comment,
+        )
 
 
 @router.message(F.text == "📚 Buyurtmalar ro'yxati")

@@ -93,14 +93,36 @@ async def seed_book_categories(session_factory) -> None:
 
 # Books
 async def list_books_by_category(session: AsyncSession, category_id: int) -> list[Book]:
+    """Return only available books for teacher-facing browse/cart flows."""
     result = await session.execute(
-        select(Book).where(Book.category_id == category_id).order_by(Book.title)
+        select(Book)
+        .where(Book.category_id == category_id, Book.is_available.is_(True))
+        .order_by(Book.title)
     )
     return list(result.scalars().all())
 
 
 async def get_book_by_id(session: AsyncSession, book_id: int) -> Book | None:
+    """Fetch a book by PK with no availability filter.
+
+    Use this in admin/management paths where unavailable books must
+    still be visible and editable. Use get_available_book_by_id for
+    any teacher-facing cart lookup.
+    """
     result = await session.execute(select(Book).where(Book.id == book_id))
+    return result.scalar_one_or_none()
+
+
+async def get_available_book_by_id(session: AsyncSession, book_id: int) -> Book | None:
+    """Fetch a book by PK, returning None if it is marked unavailable.
+
+    Use this in teacher-facing cart add flows so a book that was made
+    unavailable after the browse list was fetched cannot be silently
+    added to an order.
+    """
+    result = await session.execute(
+        select(Book).where(Book.id == book_id, Book.is_available.is_(True))
+    )
     return result.scalar_one_or_none()
 
 

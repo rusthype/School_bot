@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, func
@@ -9,7 +10,18 @@ from school_bot.database.models import BookOrder, BookOrderItem, OrderStatusHist
 from school_bot.bot.services.order_status import get_status_text
 
 
-__all__ = ["get_status_text"]
+__all__ = ["get_status_text", "StatusChangeResult"]
+
+
+@dataclass
+class StatusChangeResult:
+    """Carries the mutation outcome back to the handler so it can fire
+    the teacher notification without an extra DB round-trip."""
+
+    order: BookOrder
+    old_status: str
+    new_status: str
+    comment: str | None
 
 
 async def create_book_order(
@@ -100,6 +112,12 @@ async def set_delivery_date(
     delivery_date: datetime,
     librarian_id: int,
 ) -> BookOrder:
+    """Persist delivery_date and return the refreshed order.
+
+    The handler is responsible for calling
+    notify_teacher_delivery_date_set after this returns, using
+    order.delivery_date which is now set.
+    """
     order.delivery_date = delivery_date
     order.delivery_deadline = delivery_date
     order.escalated = False
@@ -113,8 +131,9 @@ async def confirm_order(
     session: AsyncSession,
     order: BookOrder,
     librarian_id: int,
-) -> BookOrder:
+) -> StatusChangeResult:
     old_status = order.status
+    comment = "Tasdiqlandi"
     order.status = "confirmed"
     order.confirmed_at = datetime.now(timezone.utc)
     order.librarian_id = librarian_id
@@ -126,20 +145,26 @@ async def confirm_order(
             old_status=old_status,
             new_status=order.status,
             changed_by_id=librarian_id,
-            comment="Tasdiqlandi",
+            comment=comment,
         )
     )
     await session.commit()
     await session.refresh(order)
-    return order
+    return StatusChangeResult(
+        order=order,
+        old_status=old_status,
+        new_status="confirmed",
+        comment=comment,
+    )
 
 
 async def mark_processing(
     session: AsyncSession,
     order: BookOrder,
     librarian_id: int,
-) -> BookOrder:
+) -> StatusChangeResult:
     old_status = order.status
+    comment = "Jarayonda"
     order.status = "processing"
     order.librarian_id = librarian_id
     order.updated_at = datetime.now(timezone.utc)
@@ -150,20 +175,27 @@ async def mark_processing(
             old_status=old_status,
             new_status=order.status,
             changed_by_id=librarian_id,
-            comment="Jarayonda",
+            comment=comment,
         )
     )
     await session.commit()
     await session.refresh(order)
-    return order
+    return StatusChangeResult(
+        order=order,
+        old_status=old_status,
+        new_status="processing",
+        comment=comment,
+    )
 
 
 async def reject_order(
     session: AsyncSession,
     order: BookOrder,
     librarian_id: int,
-) -> BookOrder:
+    comment: str | None = None,
+) -> StatusChangeResult:
     old_status = order.status
+    history_comment = "Rad etildi" + (f": {comment}" if comment else "")
     order.status = "rejected"
     order.librarian_id = librarian_id
     order.updated_at = datetime.now(timezone.utc)
@@ -174,20 +206,26 @@ async def reject_order(
             old_status=old_status,
             new_status=order.status,
             changed_by_id=librarian_id,
-            comment="Rad etildi",
+            comment=history_comment,
         )
     )
     await session.commit()
     await session.refresh(order)
-    return order
+    return StatusChangeResult(
+        order=order,
+        old_status=old_status,
+        new_status="rejected",
+        comment=history_comment,
+    )
 
 
 async def mark_delivered(
     session: AsyncSession,
     order: BookOrder,
     librarian_id: int,
-) -> BookOrder:
+) -> StatusChangeResult:
     old_status = order.status
+    comment = "Yetkazildi"
     order.status = "delivered"
     order.delivered_at = datetime.now(timezone.utc)
     order.delivered_by_id = librarian_id
@@ -200,12 +238,17 @@ async def mark_delivered(
             old_status=old_status,
             new_status=order.status,
             changed_by_id=librarian_id,
-            comment="Yetkazildi",
+            comment=comment,
         )
     )
     await session.commit()
     await session.refresh(order)
-    return order
+    return StatusChangeResult(
+        order=order,
+        old_status=old_status,
+        new_status="delivered",
+        comment=comment,
+    )
 
 
 async def get_order_stats(session: AsyncSession) -> dict[str, int]:

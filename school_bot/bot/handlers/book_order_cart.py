@@ -19,6 +19,7 @@ from school_bot.bot.services.book_service import (
     list_categories,
     list_books_by_category,
     get_book_by_id,
+    get_available_book_by_id,
     get_category_by_id,
 )
 from school_bot.bot.services.book_order_service import (
@@ -423,6 +424,13 @@ async def cart_add_book(callback: CallbackQuery, state: FSMContext, session: Asy
         book_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
+        return
+
+    # Guard: reject additions of books that have become unavailable since
+    # the browse page was rendered (e.g. admin toggled is_available=False).
+    available_book = await get_available_book_by_id(session, book_id)
+    if not available_book:
+        await callback.answer("🚫 Bu kitob hozirda mavjud emas.", show_alert=True)
         return
 
     data = await state.get_data()

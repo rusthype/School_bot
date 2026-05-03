@@ -10,6 +10,7 @@ from sqlalchemy import select, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from school_bot.bot.services.logger_service import get_logger
+from school_bot.bot.services.order_notifications import notify_teacher_status_change
 from school_bot.bot.services.order_status import ORDER_STATUS, get_status_text, get_priority_text
 from school_bot.database.models import BookOrder, OrderStatusHistory, User, BookOrderItem, School, Profile
 router = Router(name=__name__)
@@ -231,7 +232,7 @@ async def admin_status_comment(
     await session.commit()
     teacher = await session.get(User, order.teacher_id)
     if teacher:
-        await _notify_teacher_status_change(
+        await notify_teacher_status_change(
             message.bot,
             teacher.telegram_id,
             order.id,
@@ -243,23 +244,8 @@ async def admin_status_comment(
         f"✅ Status o'zgartirildi: {get_status_text(old_status)} ➡️ {get_status_text(new_status)}"
     )
     await state.clear()
-async def _notify_teacher_status_change(
-    bot,
-    teacher_chat_id: int,
-    order_id: int,
-    old_status: str,
-    new_status: str,
-    comment: str | None = None,
-) -> None:
-    text = (
-        "🔄 <b>Buyurtma statusi o'zgartirildi</b>\n\n"
-        f"🆔 Buyurtma #{order_id}\n"
-        f"Eski status: {get_status_text(old_status)}\n"
-        f"Yangi status: {get_status_text(new_status)}\n"
-    )
-    if comment:
-        text += f"\n💬 Izoh: {comment}"
-    await bot.send_message(chat_id=teacher_chat_id, text=text, parse_mode="HTML")
+# notify_teacher_status_change is now imported from
+# school_bot.bot.services.order_notifications
 @router.callback_query(lambda c: c.data.startswith("admin_order_history:"))
 async def admin_order_history(
     callback: CallbackQuery,
