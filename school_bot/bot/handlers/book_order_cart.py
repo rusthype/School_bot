@@ -30,7 +30,7 @@ from school_bot.bot.services.book_order_service import (
 )
 from school_bot.bot.states.book_order import BookOrderStates
 from school_bot.bot.services.logger_service import get_logger
-from school_bot.database.models import User, UserRole, Profile, School
+from school_bot.database.models import User, UserRole, OrderPriority, Profile, School
 
 router = Router(name=__name__)
 logger = get_logger(__name__)
@@ -748,8 +748,9 @@ async def _finalize_order(
         await callback.answer("Savat bo'sh.", show_alert=True)
         return
 
-    priority = data.get("priority") or "normal"
-    priority_full, priority_short = _priority_meta(priority)
+    priority_raw = data.get("priority") or OrderPriority.normal.value
+    priority = OrderPriority(priority_raw) if priority_raw in OrderPriority._value2member_map_ else OrderPriority.normal
+    priority_full, priority_short = _priority_meta(priority.value)
 
     try:
         order = await create_book_order(

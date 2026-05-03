@@ -11,6 +11,7 @@ from school_bot.bot.services.logger_service import get_logger
 from school_bot.database.models import (
     BookOrder,
     BookOrderItem,
+    OrderStatus,
     OrderStatusHistory,
     User,
     UserRole,
@@ -18,7 +19,11 @@ from school_bot.database.models import (
 
 logger = get_logger(__name__)
 
-OPEN_STATUSES: tuple[str, ...] = ("pending", "processing", "confirmed")
+OPEN_STATUSES: tuple[str, ...] = (
+    OrderStatus.pending.value,
+    OrderStatus.processing.value,
+    OrderStatus.confirmed.value,
+)
 ESCALATION_COMMENT = "Auto-escalated: delivery overdue"
 
 

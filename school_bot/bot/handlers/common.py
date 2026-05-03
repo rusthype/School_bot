@@ -22,7 +22,7 @@ from sqlalchemy import func, select, delete
 from datetime import datetime
 from school_bot.database.models import (
     User, UserRole, Task, School, PollVote, Profile, Book,
-    BookOrder, BookOrderItem, BookCategory, TeacherAttendance, BotSettings,
+    BookOrder, BookOrderItem, BookCategory, OrderStatus, TeacherAttendance, BotSettings,
 )
 from school_bot.bot.states.new_task import NewTaskStates
 from school_bot.bot.states.registration import RegistrationStates
@@ -2038,7 +2038,12 @@ async def teacher_general_report(
     ) or 0
     # Orders this month by status
     order_stats = {}
-    for status in ["pending", "confirmed", "delivered", "rejected"]:
+    for status in [
+        OrderStatus.pending.value,
+        OrderStatus.confirmed.value,
+        OrderStatus.delivered.value,
+        OrderStatus.rejected.value,
+    ]:
         cnt = await session.scalar(
             select(func.count()).where(
                 BookOrder.status == status,

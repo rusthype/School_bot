@@ -30,7 +30,7 @@ from school_bot.bot.services.order_notifications import (
     notify_teacher_delivery_date_set,
 )
 from school_bot.bot.handlers.common import get_main_keyboard
-from school_bot.database.models import BookOrder, BookOrderItem, User, UserRole
+from school_bot.database.models import BookOrder, BookOrderItem, OrderStatus, User, UserRole
 from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.utils.telegram import send_chunked_message
 
@@ -148,7 +148,7 @@ async def cmd_pending_orders(
 
     result = await session.execute(
         select(BookOrder)
-        .where(BookOrder.status == "pending")
+        .where(BookOrder.status == OrderStatus.pending.value)
         .order_by(BookOrder.created_at.desc())
         .limit(20)
     )
@@ -229,7 +229,7 @@ async def processing_order_callback(
         await callback.answer("❌ Buyurtma topilmadi.", show_alert=True)
         return
 
-    if order.status not in {"pending", "confirmed"}:
+    if order.status not in {OrderStatus.pending.value, OrderStatus.confirmed.value}:
         await callback.answer("❌ Buyurtma jarayonga o'tkazib bo'lmaydi.", show_alert=True)
         return
 
@@ -451,7 +451,7 @@ async def deliver_order_callback(
         await callback.answer("❌ Buyurtma topilmadi.", show_alert=True)
         return
 
-    if order.status not in {"confirmed", "processing"}:
+    if order.status not in {OrderStatus.confirmed.value, OrderStatus.processing.value}:
         await callback.answer("❌ Buyurtma avval tasdiqlanishi kerak.", show_alert=True)
         return
 
@@ -650,7 +650,7 @@ async def cmd_mark_done(
         await message.answer("❌ Buyurtma topilmadi.")
         return
 
-    if order.status not in {"confirmed", "processing"}:
+    if order.status not in {OrderStatus.confirmed.value, OrderStatus.processing.value}:
         await message.answer("❌ Buyurtma avval tasdiqlanishi kerak.")
         return
 
@@ -712,7 +712,7 @@ async def button_delivered_orders(
 
     result = await session.execute(
         select(BookOrder)
-        .where(BookOrder.status == "delivered")
+        .where(BookOrder.status == OrderStatus.delivered.value)
         .order_by(BookOrder.delivered_at.desc().nullslast(), BookOrder.created_at.desc())
         .limit(50)
         .options(selectinload(BookOrder.items).selectinload(BookOrderItem.book), selectinload(BookOrder.teacher))
@@ -750,7 +750,7 @@ async def button_confirmed_orders(
 
     result = await session.execute(
         select(BookOrder)
-        .where(BookOrder.status == "confirmed")
+        .where(BookOrder.status == OrderStatus.confirmed.value)
         .order_by(BookOrder.delivery_date.nullslast(), BookOrder.created_at.desc())
         .options(selectinload(BookOrder.items).selectinload(BookOrderItem.book), selectinload(BookOrder.teacher))
     )
@@ -800,7 +800,7 @@ async def button_processing_orders(
 
     result = await session.execute(
         select(BookOrder)
-        .where(BookOrder.status == "processing")
+        .where(BookOrder.status == OrderStatus.processing.value)
         .order_by(BookOrder.delivery_date.nullslast(), BookOrder.created_at.desc())
         .options(selectinload(BookOrder.items).selectinload(BookOrderItem.book), selectinload(BookOrder.teacher))
     )

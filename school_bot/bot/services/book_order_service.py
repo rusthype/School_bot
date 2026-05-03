@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from school_bot.database.models import BookOrder, BookOrderItem, OrderStatusHistory
+from school_bot.database.models import BookOrder, BookOrderItem, OrderStatus, OrderPriority, OrderStatusHistory
 from school_bot.bot.services.order_status import get_status_text
 
 
@@ -29,15 +29,20 @@ async def create_book_order(
     teacher_id: int,
     items: list[tuple[int, int]],  # (book_id, quantity)
     notes: str | None = None,
-    priority: str = "normal",
+    priority: OrderPriority = OrderPriority.normal,
 ) -> BookOrder:
-    priority_days = {"normal": 7, "urgent": 3, "express": 2}
-    default_deadline = datetime.now(timezone.utc) + timedelta(days=priority_days.get(priority, 7))
+    priority_days = {
+        OrderPriority.normal.value: 7,
+        OrderPriority.urgent.value: 3,
+        OrderPriority.express.value: 2,
+    }
+    priority_value = priority.value if isinstance(priority, OrderPriority) else priority
+    default_deadline = datetime.now(timezone.utc) + timedelta(days=priority_days.get(priority_value, 7))
     order = BookOrder(
         teacher_id=teacher_id,
-        status="pending",
+        status=OrderStatus.pending.value,
         notes=notes,
-        priority=priority,
+        priority=priority_value,
         delivery_deadline=default_deadline,
         escalated=False,
         updated_at=datetime.now(timezone.utc),
@@ -55,7 +60,7 @@ async def create_book_order(
         OrderStatusHistory(
             order_id=order.id,
             old_status="",
-            new_status="pending",
+            new_status=OrderStatus.pending.value,
             changed_by_id=teacher_id,
             comment="Buyurtma yaratildi",
         )
@@ -134,7 +139,7 @@ async def confirm_order(
 ) -> StatusChangeResult:
     old_status = order.status
     comment = "Tasdiqlandi"
-    order.status = "confirmed"
+    order.status = OrderStatus.confirmed.value
     order.confirmed_at = datetime.now(timezone.utc)
     order.librarian_id = librarian_id
     order.updated_at = datetime.now(timezone.utc)
@@ -153,7 +158,7 @@ async def confirm_order(
     return StatusChangeResult(
         order=order,
         old_status=old_status,
-        new_status="confirmed",
+        new_status=OrderStatus.confirmed.value,
         comment=comment,
     )
 
@@ -165,7 +170,7 @@ async def mark_processing(
 ) -> StatusChangeResult:
     old_status = order.status
     comment = "Jarayonda"
-    order.status = "processing"
+    order.status = OrderStatus.processing.value
     order.librarian_id = librarian_id
     order.updated_at = datetime.now(timezone.utc)
     order.updated_by_id = librarian_id
@@ -183,7 +188,7 @@ async def mark_processing(
     return StatusChangeResult(
         order=order,
         old_status=old_status,
-        new_status="processing",
+        new_status=OrderStatus.processing.value,
         comment=comment,
     )
 
@@ -196,7 +201,7 @@ async def reject_order(
 ) -> StatusChangeResult:
     old_status = order.status
     history_comment = "Rad etildi" + (f": {comment}" if comment else "")
-    order.status = "rejected"
+    order.status = OrderStatus.rejected.value
     order.librarian_id = librarian_id
     order.updated_at = datetime.now(timezone.utc)
     order.updated_by_id = librarian_id
@@ -214,7 +219,7 @@ async def reject_order(
     return StatusChangeResult(
         order=order,
         old_status=old_status,
-        new_status="rejected",
+        new_status=OrderStatus.rejected.value,
         comment=history_comment,
     )
 
@@ -226,7 +231,7 @@ async def mark_delivered(
 ) -> StatusChangeResult:
     old_status = order.status
     comment = "Yetkazildi"
-    order.status = "delivered"
+    order.status = OrderStatus.delivered.value
     order.delivered_at = datetime.now(timezone.utc)
     order.delivered_by_id = librarian_id
     order.librarian_id = librarian_id
@@ -246,18 +251,18 @@ async def mark_delivered(
     return StatusChangeResult(
         order=order,
         old_status=old_status,
-        new_status="delivered",
+        new_status=OrderStatus.delivered.value,
         comment=comment,
     )
 
 
 async def get_order_stats(session: AsyncSession) -> dict[str, int]:
     total = await session.scalar(select(func.count()).select_from(BookOrder))
-    pending = await session.scalar(select(func.count()).where(BookOrder.status == "pending"))
-    processing = await session.scalar(select(func.count()).where(BookOrder.status == "processing"))
-    confirmed = await session.scalar(select(func.count()).where(BookOrder.status == "confirmed"))
-    delivered = await session.scalar(select(func.count()).where(BookOrder.status == "delivered"))
-    rejected = await session.scalar(select(func.count()).where(BookOrder.status == "rejected"))
+    pending = await session.scalar(select(func.count()).where(BookOrder.status == OrderStatus.pending.value))
+    processing = await session.scalar(select(func.count()).where(BookOrder.status == OrderStatus.processing.value))
+    confirmed = await session.scalar(select(func.count()).where(BookOrder.status == OrderStatus.confirmed.value))
+    delivered = await session.scalar(select(func.count()).where(BookOrder.status == OrderStatus.delivered.value))
+    rejected = await session.scalar(select(func.count()).where(BookOrder.status == OrderStatus.rejected.value))
     return {
         "total": int(total or 0),
         "pending": int(pending or 0),

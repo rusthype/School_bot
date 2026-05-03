@@ -32,6 +32,20 @@ class UserRole(str, enum.Enum):
     student = "student"
 
 
+class OrderStatus(str, enum.Enum):
+    pending = "pending"
+    confirmed = "confirmed"
+    processing = "processing"
+    delivered = "delivered"
+    rejected = "rejected"
+
+
+class OrderPriority(str, enum.Enum):
+    normal = "normal"
+    urgent = "urgent"
+    express = "express"
+
+
 class User(Base):
     __tablename__ = "bot_users"
     __table_args__ = (Index("ix_bot_users_role_created", "role", "created_at"),)
@@ -211,8 +225,8 @@ class BookOrder(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     teacher_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False, index=True)
     librarian_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("bot_users.id"), nullable=True)
-    status: Mapped[str] = mapped_column(Text, default="pending", index=True)
-    priority: Mapped[str] = mapped_column(Text, default="normal", index=True)
+    status: Mapped[str] = mapped_column(Text, default=OrderStatus.pending.value, index=True)
+    priority: Mapped[str] = mapped_column(Text, default=OrderPriority.normal.value, index=True)
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

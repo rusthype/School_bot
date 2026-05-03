@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from school_bot.bot.services.logger_service import get_logger
-from school_bot.database.models import BookOrder, BookOrderItem, Profile, School, User, UserRole
+from school_bot.database.models import BookOrder, BookOrderItem, OrderStatus, Profile, School, User, UserRole
 
 logger = get_logger(__name__)
 
@@ -132,7 +132,11 @@ async def start_overdue_order_watch(
                 result = await session.execute(
                     select(BookOrder)
                     .where(
-                        BookOrder.status.in_(["pending", "processing", "confirmed"]),
+                        BookOrder.status.in_([
+                            OrderStatus.pending.value,
+                            OrderStatus.processing.value,
+                            OrderStatus.confirmed.value,
+                        ]),
                         BookOrder.escalated.is_(False),
                         or_(
                             and_(
