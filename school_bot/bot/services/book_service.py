@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from school_bot.database.models import BookCategory, Book
@@ -124,6 +124,57 @@ async def get_available_book_by_id(session: AsyncSession, book_id: int) -> Book 
         select(Book).where(Book.id == book_id, Book.is_available.is_(True))
     )
     return result.scalar_one_or_none()
+
+
+def _escape_ilike(query: str) -> str:
+    """Escape ILIKE special chars so a user's literal % or _ stays literal.
+
+    Must be applied before passing to .ilike(..., escape='\\').
+    Escaping order: backslash first, then %, then _.
+    """
+    return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def search_available_books(
+    session: AsyncSession,
+    query: str,
+    limit: int = 20,
+) -> list[Book]:
+    """Case-insensitive ILIKE match on title and author.
+
+    Returns up to ``limit`` available books whose title or author
+    contains the trimmed query. Empty/whitespace-only queries return
+    an empty list. The query is escaped against ILIKE wildcards (%
+    and _) so a teacher typing "100%" doesn't behave like a wildcard
+    search.
+
+    Books with is_available=False are excluded — same rule as
+    list_books_by_category.
+
+    NOTE: Book.title has a B-tree index (index=True in models.py).
+    Book.author has no explicit index — ILIKE will do a sequential
+    scan on the author column until a pg_trgm GIN index is added.
+    TODO: add a GIN index on (title gin_trgm_ops, author gin_trgm_ops)
+    in a future migration for better ranking and scan performance.
+    """
+    query = query.strip()
+    if not query:
+        return []
+
+    pattern = f"%{_escape_ilike(query)}%"
+    result = await session.execute(
+        select(Book)
+        .where(
+            Book.is_available.is_(True),
+            or_(
+                Book.title.ilike(pattern, escape="\\"),
+                Book.author.ilike(pattern, escape="\\"),
+            ),
+        )
+        .order_by(Book.title)
+        .limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 async def add_book(

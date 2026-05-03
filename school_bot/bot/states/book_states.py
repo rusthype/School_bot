@@ -29,3 +29,7 @@ class BookDeleteStates(StatesGroup):
 
 class CategoryAddStates(StatesGroup):
     waiting_for_name = State()
+
+
+class BookSearchStates(StatesGroup):
+    waiting_for_query = State()

@@ -273,6 +273,7 @@ async def cmd_order_books(
     for category in categories:
         builder.button(text=category.name, callback_data=f"bookcat:{category.id}")
     builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="🔍 Qidirish", callback_data="book_search_start"))
 
     await state.set_state(BookOrderStates.selecting_category)
     await state.update_data(cart={}, category_id=None, view="list")
@@ -586,6 +587,7 @@ async def cart_back_to_categories(callback: CallbackQuery, state: FSMContext, se
     for category in categories:
         builder.button(text=category.name, callback_data=f"bookcat:{category.id}")
     builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="🔍 Qidirish", callback_data="book_search_start"))
     await state.set_state(BookOrderStates.selecting_category)
     await _safe_edit_text(callback.message, "📚 Kitob kategoriyasini tanlang:", reply_markup=builder.as_markup())
     await callback.answer()
@@ -960,3 +962,31 @@ async def cancel_book_order_button(
     await state.clear()
     keyboard = get_main_keyboard(is_superadmin=is_superadmin, is_teacher=is_teacher or is_superadmin)
     await message.answer("✅ Buyurtma bekor qilindi.", reply_markup=keyboard)
+
+
+async def show_book_detail_from_search(
+    message: Message,
+    session: AsyncSession,
+    book,
+) -> None:
+    """Public wrapper around the private _show_book_detail for use by
+    book_search.py.  Search results have no category context and no
+    pagination (search results are a flat list, not a paginated deck),
+    so category_id, index, and total are passed as sentinel values
+    that suppress the navigation row inside _show_book_detail.
+    The teacher sees the book cover, title, author, availability, and
+    the 'Savatga qo'shish' button — identical to the category-browse
+    detail card, minus prev/next navigation.
+    Cart state is read from an empty dict here; the teacher can add
+    the book to their cart after tapping 'Savatga qo'shish' which
+    fires the existing cart_add callback.
+    """
+    await _show_book_detail(
+        message=message,
+        session=session,
+        book=book,
+        category_id=0,
+        cart={},
+        index=0,
+        total=1,
+    )

@@ -19,6 +19,7 @@ from school_bot.bot.handlers import (
     book_management,
     admin_management,
     book_order_cart,
+    book_search,
     support,
     superadmin_orders,
     error_handler,
@@ -182,6 +183,7 @@ async def main() -> None:
     dp.include_router(librarian.router)
     dp.include_router(book_categories.router)
     dp.include_router(book_management.router)
+    dp.include_router(book_search.router)
     dp.include_router(book_order_cart.router)
     dp.include_router(superadmin_orders.router)
     dp.include_router(superadmin_dashboard.router)
