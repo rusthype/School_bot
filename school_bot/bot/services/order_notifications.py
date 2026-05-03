@@ -7,6 +7,9 @@ never rolls back a committed status change.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from html import escape
+
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
@@ -14,6 +17,136 @@ from school_bot.bot.services.logger_service import get_logger
 from school_bot.bot.services.order_status import get_status_text
 
 logger = get_logger(__name__)
+
+
+async def _send_safe(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    *,
+    log_label: str,
+    order_id: int,
+) -> None:
+    """Send an HTML message and swallow any send failure with a logged error.
+
+    Used by every escalation notification helper so the per-recipient
+    fan-out in ``run_escalation_check`` never aborts the batch on a
+    single bad chat_id.
+    """
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except TelegramAPIError:
+        logger.error(
+            "%s: Telegram xabari yuborilmadi (order_id=%s, chat_id=%s)",
+            log_label,
+            order_id,
+            chat_id,
+            exc_info=True,
+        )
+    except Exception:
+        logger.error(
+            "%s: kutilmagan xato (order_id=%s, chat_id=%s)",
+            log_label,
+            order_id,
+            chat_id,
+            exc_info=True,
+        )
+
+
+def _format_deadline(
+    deadline: datetime | None,
+    now: datetime,
+) -> tuple[str, int]:
+    if deadline is None:
+        return "—", 0
+    days_overdue = max((now.date() - deadline.date()).days, 0)
+    return deadline.strftime("%d.%m.%Y"), days_overdue
+
+
+async def notify_librarian_escalation(
+    bot: Bot,
+    librarian_chat_id: int,
+    order_id: int,
+    deadline: datetime | None,
+    now: datetime | None = None,
+) -> None:
+    now = now or datetime.now(timezone.utc)
+    deadline_str, days_overdue = _format_deadline(deadline, now)
+    text = (
+        "🚨 <b>MUDDATI O'TGAN BUYURTMA</b>\n\n"
+        f"🆔 Buyurtma #{order_id}\n"
+        f"📅 Yetkazish muddati: {deadline_str}\n"
+        f"⚠️ Kechikkan: {days_overdue} kun\n\n"
+        "Iltimos, zudlik bilan buyurtmani yetkazing yoki holatini yangilang."
+    )
+    await _send_safe(
+        bot,
+        librarian_chat_id,
+        text,
+        log_label="notify_librarian_escalation",
+        order_id=order_id,
+    )
+
+
+async def notify_teacher_escalation(
+    bot: Bot,
+    teacher_chat_id: int,
+    order_id: int,
+    deadline: datetime | None,
+    now: datetime | None = None,
+) -> None:
+    now = now or datetime.now(timezone.utc)
+    deadline_str, days_overdue = _format_deadline(deadline, now)
+    text = (
+        "ℹ️ <b>Sizning buyurtmangiz kechikmoqda</b>\n\n"
+        f"🆔 Buyurtma #{order_id}\n"
+        f"📅 Yetkazish muddati: {deadline_str}\n"
+        f"⚠️ Kechikkan: {days_overdue} kun\n\n"
+        "Superadminga xabar yuborildi va tez orada hal qilinadi."
+    )
+    await _send_safe(
+        bot,
+        teacher_chat_id,
+        text,
+        log_label="notify_teacher_escalation",
+        order_id=order_id,
+    )
+
+
+async def notify_superadmin_escalation(
+    bot: Bot,
+    superadmin_chat_id: int,
+    order_id: int,
+    deadline: datetime | None,
+    teacher_name: str | None = None,
+    librarian_name: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    now = now or datetime.now(timezone.utc)
+    deadline_str, days_overdue = _format_deadline(deadline, now)
+    teacher_str = escape(teacher_name) if teacher_name else "Noma'lum"
+    librarian_str = escape(librarian_name) if librarian_name else "—"
+    text = (
+        "⚠️ <b>MUHIM: AUTO-ESCALATED BUYURTMA</b>\n\n"
+        f"🆔 Buyurtma #{order_id}\n"
+        f"👨‍🏫 O'qituvchi: {teacher_str}\n"
+        f"📚 Kutubxonachi: {librarian_str}\n"
+        f"📅 Yetkazish muddati: {deadline_str}\n"
+        f"⚠️ Kechikkan: {days_overdue} kun\n\n"
+        "❌ Hali yetkazilmagan! E'tibor qaratish kerak."
+    )
+    await _send_safe(
+        bot,
+        superadmin_chat_id,
+        text,
+        log_label="notify_superadmin_escalation",
+        order_id=order_id,
+    )
 
 
 async def notify_teacher_status_change(

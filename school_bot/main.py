@@ -6,6 +6,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from school_bot.bot.config import Settings
 from school_bot.bot.handlers import (
@@ -38,6 +39,7 @@ from school_bot.bot.services.group_service import seed_groups
 from school_bot.bot.services.school_service import seed_schools
 from school_bot.bot.services.book_service import seed_book_categories
 from school_bot.bot.services.order_escalation_service import start_overdue_order_watch
+from school_bot.bot.services.escalation_job import run_escalation_check
 from school_bot.bot.services.log_cleanup_service import LogCleanupService
 from school_bot.bot.services.teacher_notifier import schedule_pending_digests
 
@@ -121,9 +123,28 @@ async def main() -> None:
     storage = RedisStorage.from_url(settings.redis_url)
     dp = Dispatcher(storage=storage)
 
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        run_escalation_check,
+        trigger="cron",
+        hour=9,
+        minute=0,
+        args=[bot, session_factory],
+        id="book_order_escalation",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     async def on_startup(bot: Bot) -> None:
         asyncio.create_task(set_bot_commands(bot, settings.superadmin_ids))
-        asyncio.create_task(start_overdue_order_watch(bot=bot, session_factory=session_factory))
+        # Legacy hourly watcher disabled in favour of the new daily APScheduler
+        # job in escalation_job.py. The legacy loop only DM'd superadmins and
+        # never wrote a history row, so leaving it enabled would race with the
+        # new job: the legacy loop would flip ``escalated=True`` first and
+        # the new job would then skip those orders, silently dropping the
+        # librarian + teacher notifications. Re-enable only if the daily
+        # cadence proves too slow.
+        # asyncio.create_task(start_overdue_order_watch(bot=bot, session_factory=session_factory))
         asyncio.create_task(start_log_cleanup_watch(settings))
         # Recover any 24h teacher digests that were scheduled before
         # the previous shutdown. Reads bot_tasks rows where
@@ -134,8 +155,14 @@ async def main() -> None:
         # the per-task fire path is idempotent on
         # teacher_notif_message_id.
         asyncio.create_task(schedule_pending_digests(bot, session_factory))
+        scheduler.start()
+
+    async def on_shutdown(bot: Bot) -> None:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
 
     dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
 
     dp.message.middleware(RateLimitMiddleware(limit=30, window=60))
     dp.update.middleware(GroupAdminGuardMiddleware())

@@ -36,6 +36,7 @@ python-dotenv==1.2.2
 six==1.17.0
 SQLAlchemy==2.0.48
 alembic==1.13.2
+APScheduler==3.10.4
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 yarl==1.23.0
