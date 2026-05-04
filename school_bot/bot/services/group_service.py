@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 
 import json
 from pathlib import Path
@@ -9,6 +10,17 @@ from sqlalchemy.exc import ProgrammingError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from school_bot.database.models import Group
+
+
+def _coerce_alochi_group_id(value: str | uuid.UUID | None) -> uuid.UUID | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(value)
+    except (ValueError, TypeError):
+        return None
 
 
 
@@ -106,6 +118,7 @@ async def add_group(
     invite_link: str | None = None,
     school_id: int | None = None,
     status: str = "active",
+    alochi_group_id: str | uuid.UUID | None = None,
 ) -> Group:
     group = Group(
         name=name,
@@ -113,6 +126,7 @@ async def add_group(
         invite_link=invite_link,
         school_id=school_id,
         status=status,
+        alochi_group_id=_coerce_alochi_group_id(alochi_group_id),
     )
     session.add(group)
     await session.commit()
@@ -128,6 +142,7 @@ async def update_group(
     invite_link: str | None = None,
     school_id: int | None = None,
     status: str | None = None,
+    alochi_group_id: str | uuid.UUID | None = None,
 ) -> Group:
     if name is not None:
         group.name = name
@@ -139,6 +154,8 @@ async def update_group(
         group.school_id = school_id
     if status is not None:
         group.status = status
+    if alochi_group_id is not None:
+        group.alochi_group_id = _coerce_alochi_group_id(alochi_group_id)
     await session.commit()
     await session.refresh(group)
     return group
@@ -184,3 +201,10 @@ async def seed_groups(session_factory, groups_fallback: dict[str, int]) -> None:
             session.add(Group(name=name, chat_id=chat_id))
 
         await session.commit()
+
+async def get_group_by_alochi_id(session: AsyncSession, alochi_group_id: str | uuid.UUID) -> Group | None:
+    val = _coerce_alochi_group_id(alochi_group_id)
+    if not val:
+        return None
+    result = await session.execute(select(Group).where(Group.alochi_group_id == val))
+    return result.scalar_one_or_none()

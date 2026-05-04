@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import uuid
 from datetime import date, datetime
 from typing import Optional
 
@@ -20,6 +21,7 @@ from sqlalchemy import (
     String,
 )
 from sqlalchemy import JSON
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from school_bot.database.base import Base
@@ -482,8 +484,8 @@ class Group(Base):
     # Unique + partial index on ``alochi_group_id IS NOT NULL`` so two
     # bot Telegram chats cannot point at the same panel pedagogical
     # group (which would make panel→bot sync ambiguous).
-    alochi_group_id: Mapped[str | None] = mapped_column(
-        String(36),
+    alochi_group_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
         nullable=True,
         unique=True,
         index=True,
