@@ -55,6 +55,7 @@ from school_bot.bot.handlers import (
 from school_bot.bot.middlewares.db_session import DbSessionMiddleware
 from school_bot.bot.middlewares.user_context import UserContextMiddleware
 from school_bot.bot.middlewares.group_admin_guard import GroupAdminGuardMiddleware
+from school_bot.bot.middlewares.group_registration import GroupRegistrationMiddleware
 from school_bot.bot.middlewares.menu_guard import MenuGuardMiddleware
 from school_bot.bot.middlewares.rate_limit import RateLimitMiddleware
 from school_bot.database.session import create_session_factory, init_models
@@ -189,6 +190,7 @@ async def main() -> None:
     dp.shutdown.register(on_shutdown)
 
     dp.message.middleware(RateLimitMiddleware(limit=30, window=60))
+    dp.message.middleware(GroupRegistrationMiddleware())
     dp.update.middleware(GroupAdminGuardMiddleware())
     dp.update.middleware(DbSessionMiddleware(session_factory=session_factory))
     dp.update.middleware(
