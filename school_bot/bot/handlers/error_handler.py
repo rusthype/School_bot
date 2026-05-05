@@ -5,6 +5,7 @@ import logging
 import traceback
 from typing import Any, Dict
 
+import sentry_sdk
 from aiogram import Router
 from aiogram.exceptions import TelegramUnauthorizedError, TelegramBadRequest
 from aiogram.types import ErrorEvent
@@ -79,6 +80,7 @@ async def silent_global_error_handler(event: ErrorEvent) -> bool:
     if isinstance(error, TelegramBadRequest) and "query is too old" in str(error).lower():
         return True
 
+    sentry_sdk.capture_exception(error)
     logger.error(
         "Silent error [%s]: %s | context=%s\n%s",
         type(error).__name__,

@@ -1,5 +1,28 @@
 import asyncio
 import logging
+import os
+
+import sentry_sdk
+from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
+_SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        environment=os.getenv("BOT_ENV", "production"),
+        release=os.getenv("GIT_SHA", "unknown"),
+        traces_sample_rate=0.0,
+        profiles_sample_rate=0.0,
+        send_default_pii=False,
+        integrations=[
+            LoggingIntegration(
+                level=logging.INFO,
+                event_level=logging.ERROR,
+            ),
+            SqlalchemyIntegration(),
+        ],
+    )
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.redis import RedisStorage
