@@ -50,6 +50,7 @@ from school_bot.bot.handlers import (
     logs,
     superadmin_settings,
     teacher_attendance,
+    student_attendance,
     superadmin_attendance,
 )
 from school_bot.bot.middlewares.db_session import DbSessionMiddleware
@@ -215,6 +216,7 @@ async def main() -> None:
     dp.include_router(superadmin_settings.router)
     dp.include_router(logs.router)
     dp.include_router(teacher_attendance.router)
+    dp.include_router(student_attendance.router)
     dp.include_router(superadmin_attendance.router)
     dp.include_router(error_handler.router)
     dp.include_router(support.router)

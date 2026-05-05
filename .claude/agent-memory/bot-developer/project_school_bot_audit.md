@@ -26,15 +26,13 @@ Confirmed NOT broken (investigation findings):
 - BUG 4 (TeacherSelfEditStates): flow is complete and correct in common.py lines 3279–3459; _SELF_NAME_PATTERN and _SELF_PHONE_RE defined at 3265-3266; all state transitions wired correctly
 - BUG 5 (stubs): no silent pass handlers found; "tez orada" text in support.py is legitimate message copy, not stub code
 
-Post-role registration flow implemented (2026-04-02):
-- `handle_role_selection` no longer shows "wait" message immediately; instead sets PostRoleRegistrationStates.waiting_name and asks for full name
-- Two new FSM states added to registration.py: PostRoleRegistrationStates.waiting_name, PostRoleRegistrationStates.waiting_school
-- Name validation: regex ^[\w\s'\-]{2,80}$ (unicode); invalid input re-prompts
-- School is free text — stored in Profile.last_name until admin assigns a real school_id during approval
-- On completion: upsert_profile(first_name=name, last_name=school_text, phone="", school_id=None) + notify_superadmins_new_registration
-- /cancel and "❌ Bekor qilish" work at both steps; state.clear() + ReplyKeyboardRemove on cancel
-- notify_superadmins_new_registration updated to show free-text school from last_name when school_id is None
-- Existing approved users are unaffected (upsert_profile returns early if is_approved=True)
+Registration flow reverted to original (2026-04-02):
+- `handle_role_selection` immediately upserts a minimal profile (first_name=db_user.full_name, last_name="", phone="", school_id=None) and shows "✅ Siz [rol] sifatida ro'yxatdan o'tdingiz. Admin tasdiqlashini kuting."
+- state.clear() is called immediately after upsert — no FSM states remain active
+- notify_superadmins_new_registration called inside handle_role_selection (with try/except) before logging
+- PostRoleRegistrationStates (waiting_name, waiting_school) removed from registration.py
+- post_role_name_handler, post_role_school_handler and their cancel handlers deleted from common.py
+- _NAME_RE regex removed (was only used by deleted handlers)
 
 Keldim/Ketdim attendance fixes applied (2026-04-02, commit fix(bot)):
 - teacher_check_in_start / teacher_check_out_start: was silently returning with no user message when is_teacher=False — now sends clear error message

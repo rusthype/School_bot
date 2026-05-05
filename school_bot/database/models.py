@@ -500,6 +500,26 @@ class Group(Base):
     school: Mapped[Optional["School"]] = relationship()
 
 
+class StudentDailyAttendance(Base):
+    __tablename__ = "student_daily_attendance"
+    __table_args__ = (
+        UniqueConstraint("teacher_id", "student_profile_id", "attendance_date", name="uq_sda_teacher_student_date"),
+        Index("ix_sda_date", "attendance_date"),
+        Index("ix_sda_teacher_date", "teacher_id", "attendance_date"),
+    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    teacher_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_profile_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    attendance_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)  # present / absent / late
+    photo_file_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(10), nullable=False, server_default="manual")  # manual / ocr / ai
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    teacher: Mapped[User] = relationship(foreign_keys=[teacher_id])
+    student: Mapped[Profile] = relationship(foreign_keys=[student_profile_id])
+
+
 # Singleton row id for BotSettings (Django uses BigAutoField, id=1 by convention)
 BOT_SETTINGS_ID = 1
 

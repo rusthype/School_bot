@@ -156,6 +156,9 @@ def get_teacher_keyboard() -> ReplyKeyboardMarkup:
         KeyboardButton(text="🚪 Ketdim"),
     )
     builder.row(
+        KeyboardButton(text="📸 O'quvchi davomati"),
+    )
+    builder.row(
         KeyboardButton(text="📚 Kitoblar"),
         KeyboardButton(text="👥 O'quvchilar"),
     )
