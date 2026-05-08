@@ -351,23 +351,37 @@ async def _send_log_output(
     output = _format_output(log_lines, log_type, size, path.name)
     keyboard = _build_actions(log_type, lines, mode)
 
+    # parse_mode=None on every .answer/.answer_document below — log content
+    # contains arbitrary text (Python error reprs like "<class 'X'>",
+    # generic angle brackets, ampersands, traceback fragments) that the bot's
+    # default parse_mode="HTML" tries to interpret as entities and then
+    # rejects with TelegramBadRequest "can't parse entities: Unsupported
+    # start tag". We never want any markup parsing here — logs are plain text.
     if len(output) > 3800:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".log") as tmp:
             tmp.write("\n".join(log_lines).encode("utf-8", errors="ignore"))
             tmp_path = tmp.name
         try:
             if isinstance(target, CallbackQuery):
-                await target.message.answer_document(FSInputFile(tmp_path), caption=f"📋 {log_type} logs")
+                await target.message.answer_document(
+                    FSInputFile(tmp_path),
+                    caption=f"📋 {log_type} logs",
+                    parse_mode=None,
+                )
             else:
-                await target.answer_document(FSInputFile(tmp_path), caption=f"📋 {log_type} logs")
+                await target.answer_document(
+                    FSInputFile(tmp_path),
+                    caption=f"📋 {log_type} logs",
+                    parse_mode=None,
+                )
         finally:
             os.unlink(tmp_path)
         return
 
     if isinstance(target, CallbackQuery):
-        await target.message.answer(output, reply_markup=keyboard)
+        await target.message.answer(output, reply_markup=keyboard, parse_mode=None)
     else:
-        await target.answer(output, reply_markup=keyboard)
+        await target.answer(output, reply_markup=keyboard, parse_mode=None)
 
 
 async def send_logs_menu(message: Message) -> None:
@@ -440,7 +454,11 @@ async def logs_download(callback: CallbackQuery, is_superadmin: bool = False) ->
         tmp_path = tmp.name
 
     try:
-        await callback.message.answer_document(FSInputFile(tmp_path), caption=f"📋 {log_type} logs")
+        await callback.message.answer_document(
+            FSInputFile(tmp_path),
+            caption=f"📋 {log_type} logs",
+            parse_mode=None,
+        )
     finally:
         os.unlink(tmp_path)
     await callback.answer()
