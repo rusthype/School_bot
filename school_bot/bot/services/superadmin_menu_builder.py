@@ -31,6 +31,7 @@ class SuperAdminMenuBuilder:
         )
         builder.row(
             KeyboardButton(text="📦 Buyurtmalar"),
+            KeyboardButton(text="📋 Monitoring Natijalar"),
             KeyboardButton(text="📊 Statistika"),
         )
         builder.row(

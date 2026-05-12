@@ -49,6 +49,7 @@ from school_bot.bot.handlers import (
     superadmin_dashboard,
     logs,
     superadmin_settings,
+    superadmin_monitoring,
     teacher_attendance,
     student_attendance,
     superadmin_attendance,
@@ -214,6 +215,7 @@ async def main() -> None:
     dp.include_router(superadmin_orders.router)
     dp.include_router(superadmin_dashboard.router)
     dp.include_router(superadmin_settings.router)
+    dp.include_router(superadmin_monitoring.router)
     dp.include_router(logs.router)
     dp.include_router(teacher_attendance.router)
     dp.include_router(student_attendance.router)
