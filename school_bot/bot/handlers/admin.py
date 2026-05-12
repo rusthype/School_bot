@@ -2591,7 +2591,14 @@ async def teacher_edit_field_select(
         profile = await get_profile_by_user_id(session, user_id)
         current_groups = list(profile.assigned_groups or []) if profile else []
         await state.update_data(pending_groups=current_groups)
-        groups = await list_groups(session)
+
+        # Show only groups that belong to the teacher's school
+        school_id = profile.school_id if profile else None
+        if school_id:
+            groups = await list_groups_by_school(session, school_id)
+        else:
+            groups = await list_groups(session)
+
         if not groups:
             await callback.message.edit_text(
                 "📭 Hech qanday guruh topilmadi.\n\n/cancel — bekor qilish"
