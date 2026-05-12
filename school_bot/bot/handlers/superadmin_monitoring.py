@@ -44,14 +44,15 @@ async def _list_schools_with_results(session: AsyncSession) -> list[dict]:
                 s.name         AS school_name,
                 COUNT(tr.id)   AS result_count
             FROM bot_schools s
-            JOIN monitoring_testresult tr
+            JOIN monitoring_test_results tr
                 ON tr.school_id::text = s.alochi_school_id
             GROUP BY s.id, s.name
             ORDER BY s.name
         """))
         return [{"id": r.school_id, "name": r.school_name, "count": r.result_count} for r in rows]
     except Exception:
-        # Fallback: just list all schools
+        # Rollback aborted transaction before fallback query
+        await session.rollback()
         rows = await session.execute(select(School).order_by(School.name))
         return [{"id": s.id, "name": s.name, "count": 0} for s in rows.scalars()]
 
@@ -66,7 +67,7 @@ async def _list_groups_for_school(session: AsyncSession, school_id: int) -> list
                 g.alochi_group_id,
                 COUNT(tr.id)   AS result_count
             FROM bot_groups g
-            LEFT JOIN monitoring_testresult tr
+            LEFT JOIN monitoring_test_results tr
                 ON tr.group_id::text = g.alochi_group_id::text
             WHERE g.school_id = :sid
             GROUP BY g.id, g.name, g.alochi_group_id
@@ -76,6 +77,7 @@ async def _list_groups_for_school(session: AsyncSession, school_id: int) -> list
                  "alochi_id": str(r.alochi_group_id) if r.alochi_group_id else None,
                  "count": r.result_count} for r in rows]
     except Exception:
+        await session.rollback()
         rows = await session.execute(
             select(Group).where(Group.school_id == school_id).order_by(Group.name)
         )
@@ -93,8 +95,8 @@ async def _get_results(session: AsyncSession,
 
     if school_id is not None:
         filters.append("""
-            tr.school_id IN (
-                SELECT alochi_school_id::uuid FROM bot_schools WHERE id = :school_id
+            tr.school_id::text IN (
+                SELECT alochi_school_id FROM bot_schools WHERE id = :school_id
             )
         """)
         params["school_id"] = school_id
@@ -109,7 +111,7 @@ async def _get_results(session: AsyncSession,
         rows = await session.execute(text(f"""
             SELECT
                 tr.id,
-                tr.created_at,
+                tr.synced_at   AS created_at,
                 tr.variant,
                 tr.math_score,
                 tr.eng_score,
@@ -118,18 +120,18 @@ async def _get_results(session: AsyncSession,
                 p.title        AS package_title,
                 u.first_name   AS first_name,
                 u.last_name    AS last_name,
-                g.grade        AS grade
-            FROM monitoring_testresult tr
-            LEFT JOIN monitoring_monitoringpackage p ON p.id = tr.package_id
-            LEFT JOIN monitoring_monitoringcred   c ON c.id = tr.cred_id
-            LEFT JOIN monitoring_student          u ON u.id = c.student_id
-            LEFT JOIN monitoring_studentgroup     g ON g.id = tr.group_id
+                u.grade         AS grade
+            FROM monitoring_test_results tr
+            LEFT JOIN monitoring_packages p ON p.id = tr.package_id
+            LEFT JOIN students_student    u ON u.id = tr.student_id
+            LEFT JOIN groups_group        g ON g.id = tr.group_id
             {where}
             ORDER BY tr.created_at DESC
             LIMIT 500
         """), params)
         return [dict(r._mapping) for r in rows]
     except Exception as exc:
+        await session.rollback()
         return []
 
 
@@ -141,7 +143,7 @@ def _build_html(results: list[dict], school_name: str, group_label: str) -> byte
 
     rows_html = ""
     for i, r in enumerate(results, 1):
-        name = f"{r.get('first_name', '')} {r.get('last_name', '')}".strip() or "—"
+        name = (f"{r.get('first_name', '')} {r.get('last_name', '')}".strip() or r.get('full_name','') or '—')
         sana = r.get("created_at")
         sana_str = sana.strftime("%d.%m.%Y %H:%M") if isinstance(sana, _dt) else str(sana or "—")
         passed_html = (
@@ -350,7 +352,7 @@ def _build_pdf(results: list[dict], school_name: str, group_label: str) -> bytes
         table_data = [headers]
 
         for i, r in enumerate(results, 1):
-            name = f"{r.get('first_name', '')} {r.get('last_name', '')}".strip() or "—"
+            name = (f"{r.get('first_name', '')} {r.get('last_name', '')}".strip() or r.get('full_name','') or '—')
             sana = r.get("created_at")
             sana_str = sana.strftime("%d.%m.%Y %H:%M") if isinstance(sana, _dt) else str(sana or "—")
             table_data.append([
