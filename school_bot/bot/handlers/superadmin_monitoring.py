@@ -214,7 +214,10 @@ async def school_selected(callback: CallbackQuery, session: AsyncSession,
         return
 
     await state.set_state(MonitoringStates.choose_group)
-    await state.update_data(school_id=school_id, school_name=school_name)
+    # group id → name mapping saqlaymiz
+    group_names = {(g["alochi_id"] or g["id"] or ""): g["name"] for g in groups}
+    group_names["ALL"] = "Barcha guruhlar"
+    await state.update_data(school_id=school_id, school_name=school_name, group_names=group_names)
 
     kb = _groups_keyboard(groups)
     await callback.message.edit_text(
@@ -241,7 +244,9 @@ async def group_selected(callback: CallbackQuery, session: AsyncSession,
     await callback.answer()
 
     group_id = None if group_key == "ALL" else group_key
-    group_label = "Barcha guruhlar" if group_key == "ALL" else group_key
+    # Group nomini state'dan olamiz
+    group_names = data.get("group_names", {})
+    group_label = group_names.get(group_key, group_key if group_key != "ALL" else "Barcha guruhlar")
 
     results = await _get_results(
         session,
