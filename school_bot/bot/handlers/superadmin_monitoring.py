@@ -131,30 +131,29 @@ async def _get_results(session: AsyncSession,
 def _schools_keyboard(schools: list[dict]) -> InlineKeyboardMarkup:
     rows = []
     for s in schools[:24]:
-        cnt = f" ({s['count']})" if s.get("count") else ""
+        cnt = f"  •  {s['count']} natija" if s.get("count") else ""
         rows.append([InlineKeyboardButton(
-            text=f"🏫 {s['name']}{cnt}",
+            text=f"{s['name']}{cnt}",
             callback_data=f"mon_sch:{s['id']}",
         )])
-    rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="mon_cancel")])
+    rows.append([InlineKeyboardButton(text="✖ Yopish", callback_data="mon_cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _groups_keyboard(groups: list[dict], school_id: str) -> InlineKeyboardMarkup:
     rows = []
-    # "Hammasi" button
+    total = sum(g.get("count", 0) for g in groups)
     rows.append([InlineKeyboardButton(
-        text="📥 Barcha guruhlar (hammasi)",
+        text=f"📋 Barcha guruhlar  •  {total} natija",
         callback_data=f"mon_grp:{school_id}:ALL",
     )])
     for g in groups[:20]:
-        cnt = f" ({g['count']})" if g.get("count") else ""
+        cnt = f"  •  {g['count']}" if g.get("count") else ""
         rows.append([InlineKeyboardButton(
-            text=f"👥 {g['name']}{cnt}",
+            text=f"{g['name']}{cnt}",
             callback_data=f"mon_grp:{school_id}:{g['alochi_id'] or g['id']}",
         )])
-    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="mon_back")])
-    rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="mon_cancel")])
+    rows.append([InlineKeyboardButton(text="← Orqaga", callback_data="mon_back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -252,63 +251,54 @@ async def group_selected(callback: CallbackQuery, session: AsyncSession,
 
     if not results:
         await callback.message.edit_text(
-            f"📭 <b>{school_name}</b> — {group_label}\nNatijalar topilmadi.",
+            f"📭 Natija topilmadi\n\n<b>{school_name}</b>  ·  {group_label}",
             parse_mode="HTML",
         )
         await state.clear()
         return
 
-    # Summary message
-    passed = sum(1 for r in results if r.get("passed"))
-    avg_pct = int(sum(r.get("total_pct", 0) for r in results) / len(results))
+    passed   = sum(1 for r in results if r.get("passed"))
+    failed   = len(results) - passed
+    avg_pct  = int(sum(r.get("total_pct", 0) for r in results) / len(results))
+    pass_pct = int(passed / len(results) * 100) if results else 0
+    bar      = "█" * int(pass_pct / 10) + "░" * (10 - int(pass_pct / 10))
+
     summary = (
         f"📊 <b>{school_name}</b>\n"
-        f"👥 {group_label}\n"
-        f"━━━━━━━━━━━\n"
-        f"Jami: <b>{len(results)}</b> ta natija\n"
-        f"O'tdi: <b>{passed}</b> / {len(results)}\n"
-        f"O'rtacha: <b>{avg_pct}%</b>\n"
-        f"━━━━━━━━━━━\n"
-        f"📥 Excel fayl tayyorlanmoqda..."
+        f"<i>{group_label}</i>\n\n"
+        f"Jami topshirdi:  <b>{len(results)}</b>\n"
+        f"✅ O\'tdi:       <b>{passed}</b>\n"
+        f"❌ O\'tmadi:    <b>{failed}</b>\n"
+        f"📈 O\'rtacha:   <b>{avg_pct}%</b>\n\n"
+        f"<code>[{bar}] {pass_pct}%</code>\n\n"
+        f"⏳ Fayllar tayyorlanmoqda..."
     )
     await callback.message.edit_text(summary, parse_mode="HTML")
 
-    stamp = datetime.now().strftime('%Y%m%d_%H%M')
-    prefix = f"natijalar_{school_name[:12]}_{stamp}"
+    stamp  = datetime.now().strftime("%d.%m.%Y %H:%M")
+    prefix = f"natijalar_{school_name[:15]}_{datetime.now().strftime('%Y%m%d_%H%M')}"
     caption = (
-        f"📊 <b>{school_name}</b> — {group_label}\n"
-        f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
-        f"📝 {len(results)} ta natija · {passed} o'tdi · o'rt. {avg_pct}%"
+        f"📊 <b>{school_name}</b>  ·  {group_label}\n"
+        f"🕐 {stamp}\n"
+        f"👤 {len(results)} ta  ·  ✅ {passed}  ·  ❌ {failed}  ·  📈 {avg_pct}%"
     )
 
-    # 1. HTML fayl
     html_bytes = _build_html(results, school_name, group_label)
+    pdf_bytes  = _build_pdf(results, school_name, group_label)
+
     await callback.message.answer_document(
         document=BufferedInputFile(html_bytes, filename=f"{prefix}.html"),
-        caption=caption + "\n\n🌐 <i>HTML: brauzerda oching, chop etish mumkin</i>",
-        parse_mode="HTML",
+        caption=caption, parse_mode="HTML",
     )
-
-    # 2. PDF fayl
-    pdf_bytes = _build_pdf(results, school_name, group_label)
     if pdf_bytes:
         await callback.message.answer_document(
             document=BufferedInputFile(pdf_bytes, filename=f"{prefix}.pdf"),
-            caption="📄 PDF versiya",
         )
-    else:
-        await callback.message.answer(
-            "⚠️ PDF yaratishda xato (reportlab o'rnatilmagan). "
-            "HTML faylni brauzerda ochib, Ctrl+P → PDF sifatida saqlang."
-        )
-
-    # 3. Excel
     excel_bytes = _build_excel(results, school_name)
     await callback.message.answer_document(
         document=BufferedInputFile(excel_bytes, filename=f"{prefix}.xlsx"),
-        caption="📊 Excel versiya",
     )
-
+    await state.clear()
     await state.clear()
 
 
