@@ -12,8 +12,8 @@ if _SENTRY_DSN:
         dsn=_SENTRY_DSN,
         environment=os.getenv("BOT_ENV", "production"),
         release=os.getenv("GIT_SHA", "unknown"),
-        traces_sample_rate=0.0,
-        profiles_sample_rate=0.0,
+        traces_sample_rate=0.05,   # 5% sampling — sekin so'rovlar Sentry'da ko'rinadi
+        profiles_sample_rate=0.0,   # profiling off — CPU intensive, kerak emas hozir
         send_default_pii=False,
         integrations=[
             LoggingIntegration(

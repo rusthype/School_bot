@@ -4,6 +4,11 @@ services:
     restart: always
     networks:
       - internal
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256m
   bot:
     build: .
     restart: unless-stopped
@@ -41,6 +46,11 @@ services:
     networks:
       - internal
       - alochi
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
 
 networks:
   internal:
