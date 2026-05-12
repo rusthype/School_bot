@@ -140,18 +140,19 @@ def _schools_keyboard(schools: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _groups_keyboard(groups: list[dict], school_id: str) -> InlineKeyboardMarkup:
+def _groups_keyboard(groups: list[dict]) -> InlineKeyboardMarkup:
     rows = []
     total = sum(g.get("count", 0) for g in groups)
     rows.append([InlineKeyboardButton(
         text=f"📋 Barcha guruhlar  •  {total} natija",
-        callback_data=f"mon_grp:{school_id}:ALL",
+        callback_data="mon_grp:ALL",
     )])
     for g in groups[:20]:
         cnt = f"  •  {g['count']}" if g.get("count") else ""
+        gid = (g['alochi_id'] or g['id'] or '')[:36]
         rows.append([InlineKeyboardButton(
             text=f"{g['name']}{cnt}",
-            callback_data=f"mon_grp:{school_id}:{g['alochi_id'] or g['id']}",
+            callback_data=f"mon_grp:{gid}",
         )])
     rows.append([InlineKeyboardButton(text="← Orqaga", callback_data="mon_back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -215,7 +216,7 @@ async def school_selected(callback: CallbackQuery, session: AsyncSession,
     await state.set_state(MonitoringStates.choose_group)
     await state.update_data(school_id=school_id, school_name=school_name)
 
-    kb = _groups_keyboard(groups, school_id)
+    kb = _groups_keyboard(groups)
     await callback.message.edit_text(
         f"🏫 <b>{school_name}</b>\n👥 <b>Guruhni tanlang:</b>",
         reply_markup=kb, parse_mode="HTML",
@@ -230,11 +231,10 @@ async def group_selected(callback: CallbackQuery, session: AsyncSession,
         await callback.answer("⛔ Ruxsat yo'q.", show_alert=True)
         return
 
-    parts = callback.data.split(":")
-    school_id = parts[1]
-    group_key = parts[2]  # UUID or "ALL"
+    group_key = callback.data.split(":", 1)[1]  # "ALL" or UUID
 
     data = await state.get_data()
+    school_id   = data.get("school_id", "")
     school_name = data.get("school_name", "—")
 
     await callback.message.edit_text("⏳ Natijalar yuklanmoqda...")
