@@ -37,6 +37,11 @@ class Settings(BaseSettings):
         alias="ALOCHI_SYNC_URL",
         description="Base URL for the Alochi internal bot endpoints, e.g. https://api.alochi.org/api/v1/internal/bot",
     )
+    # Vision AI providers (davomat foto tahlili uchun).
+    # OpenRouter → Gemini direct zanjiri — bittasi ishlamasa ikkinchisi ishlaydi.
+    openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+
     alochi_sync_token: str = Field(
         default="",
         alias="ALOCHI_SYNC_TOKEN",
